@@ -2,6 +2,15 @@ export type OcrLine = {
   text: string
   confidence: number
   box?: number[][] | null
+  row?: number | null
+}
+
+export type OcrWord = {
+  text: string
+  confidence: number
+  box?: number[][] | null
+  row?: number
+  line_index?: number
 }
 
 export type NameAlternative = {
@@ -75,6 +84,7 @@ export type OcrJob = {
   status: string
   extracted_text: string | null
   lines: OcrLine[]
+  words?: OcrWord[]
   table: unknown
   death_records: DeathRecordsPayload | null
   engine: string | null

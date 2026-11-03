@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     ocr_use_gpu: bool = False
     ocr_max_image_side: int = 3200
     ocr_min_confidence: float = 0.80
+    bina_model_dir: str = "models/bina-0.2"
+    bina_device: str = "cpu"
+    bina_score_threshold: float = 0.0
     host: str = "0.0.0.0"
     port: int = 8000
 
@@ -31,6 +34,13 @@ class Settings(BaseSettings):
         if not path.is_absolute():
             path = BASE_DIR / path
         path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
+    def bina_model_path(self) -> Path:
+        path = Path(self.bina_model_dir)
+        if not path.is_absolute():
+            path = BASE_DIR / path
         return path
 
     @property

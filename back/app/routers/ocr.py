@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import uuid
 from pathlib import Path
+from typing import Any, Optional
 
 import aiofiles
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -13,12 +14,13 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.database import get_db
 from app.models import OcrJob
-from app.schemas import DeathRecordsPayload, OcrJobOut, OcrLine, OcrTable
+from app.schemas import DeathRecordsPayload, OcrJobOut, OcrLine, OcrTable, OcrWord
 from app.services.excel_export import build_excel
 from app.services.ocr_engine import LineResult, get_ocr_service
 from app.services.preprocess import enhance_for_ocr
 from app.services.row_slices import build_row_slices
 from app.services.table_structure import build_table, table_from_payload
+from app.services.word_ai import polish_for_word
 from app.services.word_export import build_word
 
 router = APIRouter(prefix="/api/ocr", tags=["ocr"])
@@ -71,6 +73,18 @@ def _records_for_job(job: OcrJob) -> DeathRecordsPayload | None:
         return None
 
 
+def _words_from_records(job: OcrJob) -> list[OcrWord]:
+    records = _job_records_dict(job) or {}
+    raw_words = ((records.get("details") or {}).get("bina_words")) or []
+    words: list[OcrWord] = []
+    for item in raw_words:
+        try:
+            words.append(OcrWord.model_validate(item))
+        except (ValueError, TypeError):
+            continue
+    return words
+
+
 def _serialize_job(job: OcrJob) -> OcrJobOut:
     lines: list[OcrLine] = []
     if job.lines_json:
@@ -87,6 +101,7 @@ def _serialize_job(job: OcrJob) -> OcrJobOut:
         status=job.status,
         extracted_text=job.extracted_text,
         lines=lines,
+        words=_words_from_records(job),
         table=_table_for_job(job),
         death_records=_records_for_job(job),
         engine=job.engine,
@@ -164,10 +179,26 @@ async def upload_and_extract(
             details = dict(records_payload.get("details") or {})
             details["enhanced_image"] = enhanced_name
             details["row_slices"] = slices
+            bina_words = [word.as_dict() for word in (result.words or [])]
+            details["bina_words"] = bina_words
+            details["bina"] = (result.details or {}).get("bina") or {
+                "word_count": len(bina_words),
+                "engine": result.engine,
+            }
+            # OCR AI polish for better Word export (cached on the job).
+            try:
+                details["word_ai"] = polish_for_word(
+                    full_text=result.text or "",
+                    lines=[line.text for line in result.lines],
+                    records=list(record_rows),
+                    words=[word.text for word in (result.words or [])],
+                )
+            except Exception:
+                details["word_ai"] = {"ai_available": False, "paragraphs": [], "valid_words": []}
             if result.death_records is not None:
                 result.death_records = dict(result.death_records)
                 result.death_records["details"] = details
-            elif slices:
+            else:
                 result.death_records = {
                     "records": [],
                     "similar_name_pairs": [],
@@ -186,6 +217,7 @@ async def upload_and_extract(
                     "text": line.text,
                     "confidence": line.confidence,
                     "box": line.box,
+                    "row": line.row,
                 }
                 for line in result.lines
             ],
@@ -265,13 +297,18 @@ def get_job_slice(job_id: int, slice_name: str, db: Session = Depends(get_db)) -
     return FileResponse(path, media_type="image/png", filename=safe_name)
 
 
-def _job_records_dict(job: OcrJob) -> Optional[dict]:
+def _job_records_dict(job: OcrJob) -> Optional[dict[str, Any]]:
     if not job.records_json:
         return None
     try:
         return json.loads(job.records_json)
     except (json.JSONDecodeError, TypeError, ValueError):
         return None
+
+
+def _bina_words_from_job(job: OcrJob) -> list[dict[str, Any]]:
+    records = _job_records_dict(job) or {}
+    return list(((records.get("details") or {}).get("bina_words")) or [])
 
 
 @router.get("/{job_id}/excel")
@@ -302,6 +339,7 @@ def download_excel(job_id: int, db: Session = Depends(get_db)) -> Response:
         death_records=records,
         min_confidence=get_settings().ocr_min_confidence,
         row_slices=slices,
+        bina_words=_bina_words_from_job(job),
     )
     download_name = f"deceased-list-{job.id}.xlsx"
     return Response(
@@ -322,6 +360,25 @@ def download_word(job_id: int, db: Session = Depends(get_db)) -> Response:
 
     records = _job_records_dict(job)
     slices = ((records or {}).get("details") or {}).get("row_slices") or []
+    line_texts = [line.text for line in _lines_from_job(job)]
+    bina_words = _bina_words_from_job(job)
+    word_texts = [str(item.get("text") or "") for item in bina_words if item.get("text")]
+    # Refresh Word AI polish on download when cache is empty.
+    if records is not None:
+        details = dict(records.get("details") or {})
+        if not (details.get("word_ai") or {}).get("paragraphs"):
+            try:
+                details["word_ai"] = polish_for_word(
+                    full_text=job.extracted_text or "",
+                    lines=line_texts,
+                    records=list(records.get("records") or []),
+                    words=word_texts,
+                )
+                records["details"] = details
+                job.records_json = json.dumps(records, ensure_ascii=False)
+                db.commit()
+            except Exception:
+                pass
     payload = build_word(
         filename=job.filename,
         full_text=job.extracted_text or "",
@@ -329,6 +386,10 @@ def download_word(job_id: int, db: Session = Depends(get_db)) -> Response:
         engine=job.engine,
         confidence=job.confidence,
         row_slices=slices,
+        lines=line_texts,
+        words=word_texts,
+        bina_words=bina_words,
+        use_ai=True,
     )
     download_name = f"nastaliq-names-{job.id}.docx"
     return Response(

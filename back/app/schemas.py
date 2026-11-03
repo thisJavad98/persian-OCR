@@ -10,6 +10,15 @@ class OcrLine(BaseModel):
     text: str
     confidence: float
     box: Optional[List[List[float]]] = None
+    row: Optional[int] = None
+
+
+class OcrWord(BaseModel):
+    text: str
+    confidence: float
+    box: Optional[List[List[float]]] = None
+    row: int = 0
+    line_index: int = 0
 
 
 class OcrTableCell(BaseModel):
@@ -108,6 +117,7 @@ class OcrJobOut(BaseModel):
     status: str
     extracted_text: Optional[str] = None
     lines: List[OcrLine] = Field(default_factory=list)
+    words: List[OcrWord] = Field(default_factory=list)
     table: Optional[OcrTable] = None
     death_records: Optional[DeathRecordsPayload] = None
     engine: Optional[str] = None

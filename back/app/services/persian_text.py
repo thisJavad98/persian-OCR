@@ -13,8 +13,16 @@ _PERSIAN_CHAR = re.compile(
     r"\s"
     r"\.,،؛:!؟\-\(\)\[\]«»\"'/٪%]"
 )
-_HAS_PERSIAN_LETTER = re.compile(r"[\u0600-\u06FF]")
+# Letters only — exclude Arabic/Persian digits (U+0660–0669, U+06F0–06F9) and marks.
+_HAS_PERSIAN_LETTER = re.compile(
+    r"["
+    r"ءآأؤإئابةتثجحخدذرزسشصضطظعغفقكلمنهوىي"  # Arabic core + alef variants
+    r"پچژکگیۀہەھڪىيھ"  # Persian / Kurdish extras commonly seen in OCR
+    r"\u0621-\u063a\u0641-\u064a\u067e\u0686\u0698\u06a9\u06af\u06cc\u06c0\u06d5\u06be"
+    r"]"
+)
 _CJK = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff66-\uff9f]")
+_PERSIAN_OR_ARABIC_DIGIT = re.compile(r"[0-9۰-۹٠-٩]")
 _MULTI_SPACE = re.compile(r"[ \t\u200f\u200e]+")
 _MULTI_NL = re.compile(r"\n{3,}")
 
@@ -73,6 +81,25 @@ def normalize_persian(text: str) -> str:
     return kept.strip()
 
 
+def has_persian_letters(text: str, min_letters: int = 1) -> bool:
+    """True when the string contains real Persian/Arabic letters (not digits-only)."""
+    cleaned = normalize_persian(text or "")
+    if not cleaned:
+        return False
+    return len(_HAS_PERSIAN_LETTER.findall(cleaned)) >= min_letters
+
+
+def is_digits_only(text: str) -> bool:
+    cleaned = normalize_persian(text or "").strip()
+    if not cleaned:
+        return False
+    if has_persian_letters(cleaned):
+        return False
+    return bool(_PERSIAN_OR_ARABIC_DIGIT.search(cleaned)) and not re.search(
+        r"[A-Za-z]", cleaned
+    )
+
+
 def is_meaningful_persian(text: str, min_letters: int = 2) -> bool:
     """Reject empty, CJK, or Latin-only OCR garbage."""
     cleaned = normalize_persian(text)
@@ -83,7 +110,7 @@ def is_meaningful_persian(text: str, min_letters: int = 2) -> bool:
     letters = _HAS_PERSIAN_LETTER.findall(cleaned)
     if len(letters) < min_letters:
         # Allow pure numbers (IDs, dates) with enough digits.
-        digits = re.findall(r"[0-9۰-۹]", cleaned)
+        digits = _PERSIAN_OR_ARABIC_DIGIT.findall(cleaned)
         return len(digits) >= 2 and len(cleaned) <= 24
     # Too many non-letters relative to Persian content → noise.
     ratio = len(letters) / max(len(re.sub(r"\s", "", cleaned)), 1)

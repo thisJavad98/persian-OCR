@@ -329,7 +329,7 @@ function App() {
               if (job?.status !== 'completed') event.preventDefault()
             }}
           >
-            دانلود ورد
+            دانلود ورد AI
           </a>
           <a
             className={`btn primary ${job?.status === 'completed' ? '' : 'is-disabled'}`}
@@ -466,6 +466,38 @@ function App() {
                       </ol>
                     </div>
                   )}
+
+                  {(() => {
+                    // Letters only — exclude Persian/Arabic digits (۰-۹ / ٠-٩).
+                    const persianLetterRe = new RegExp(
+                      '[\\u0621-\\u063A\\u0641-\\u064A\\u067E\\u0686\\u0698\\u06A9\\u06AF\\u06CC\\u0629\\u0647\\u0648\\u06CC]',
+                    )
+                    const detectedWords = (job.words || []).filter((word) =>
+                      persianLetterRe.test(word.text || ''),
+                    )
+                    if (!detectedWords.length) return null
+                    return (
+                      <div className="similar-box">
+                        <div className="lines-head">
+                          <span>واژه‌های تشخیص‌شده (Bina / OCR)</span>
+                          <span className="num">{detectedWords.length} واژه</span>
+                        </div>
+                        <p className="valid-words" dir="rtl" lang="fa">
+                          {detectedWords.map((word) => word.text).join('، ')}
+                        </p>
+                        <ul className="ocr-lines" dir="rtl" lang="fa">
+                          {detectedWords.slice(0, 120).map((word, index) => (
+                            <li key={`${index}-${word.text}-${word.row ?? 0}`}>
+                              <span>{word.text}</span>
+                              <span className="num similar-pct">
+                                {confidenceLabel(word.confidence)}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )
+                  })()}
 
                   {job.extracted_text?.trim() && (
                     <div className="similar-box">

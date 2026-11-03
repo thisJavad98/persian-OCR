@@ -27,6 +27,7 @@ def build_excel(
     death_records: Optional[Dict[str, Any]] = None,
     min_confidence: float = 0.80,
     row_slices: Optional[List[Dict[str, Any]]] = None,
+    bina_words: Optional[List[Dict[str, Any]]] = None,
 ) -> bytes:
     workbook = Workbook()
     thin = Border(
@@ -173,6 +174,38 @@ def build_excel(
         else:
             sheet["A1"] = full_text or "متنی یافت نشد"
 
+    detected = list(
+        bina_words
+        or ((death_records or {}).get("details") or {}).get("bina_words")
+        or []
+    )
+    if detected:
+        words_sheet = workbook.create_sheet("واژه‌های Bina")
+        words_sheet.sheet_view.rightToLeft = True
+        words_sheet.append(["ردیف", "واژه", "اطمینان", "اندیس خط", "جعبه"])
+        for cell in words_sheet[1]:
+            cell.font = Font(bold=True)
+        for item in detected:
+            box = item.get("box")
+            box_txt = ""
+            if box:
+                try:
+                    flat = [f"{float(p[0]):.1f},{float(p[1]):.1f}" for p in box]
+                    box_txt = " | ".join(flat)
+                except (TypeError, ValueError, IndexError):
+                    box_txt = str(box)
+            words_sheet.append(
+                [
+                    item.get("row"),
+                    item.get("text"),
+                    round(float(item.get("confidence") or 0), 4),
+                    item.get("line_index"),
+                    box_txt,
+                ]
+            )
+        for index, width in enumerate([8, 28, 12, 10, 48], start=1):
+            words_sheet.column_dimensions[words_sheet.cell(row=1, column=index).column_letter].width = width
+
     summary = workbook.create_sheet("خلاصه")
     summary["A1"] = "نام فایل"
     summary["B1"] = filename
@@ -186,6 +219,8 @@ def build_excel(
     summary["B5"] = (
         ((death_records or {}).get("details") or {}).get("name_agent") or {}
     ).get("model") or "lexicon"
+    summary["A6"] = "تعداد واژه‌های Bina"
+    summary["B6"] = len(detected)
     summary["A7"] = "متن خلاصه"
     summary["A8"] = (death_records or {}).get("summary_text") or full_text
     summary["A8"].alignment = Alignment(wrap_text=True, readingOrder=2)

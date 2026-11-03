@@ -7,6 +7,11 @@ back/.env
 back/uploads/*
 !back/uploads/.gitkeep
 
+# Bina / OCR model weights (download via back/scripts/download_bina.py)
+back/models/bina-0.2/**
+!back/models/bina-0.2/README.md
+!back/models/README.md
+
 # Node
 front/node_modules/
 front/dist/

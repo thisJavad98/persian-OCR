@@ -1,0 +1,19 @@
+# Python
+back/.venv/
+back/__pycache__/
+back/**/__pycache__/
+back/*.pyc
+back/.env
+back/uploads/*
+!back/uploads/.gitkeep
+
+# Node
+front/node_modules/
+front/dist/
+
+# Taste / OS
+.taste-skill/
+.DS_Store
+*.xlsx
+.idea/
+.vscode/

@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import httpx
 
+from app.services.cloud_ai import get_cloud_ai
 from app.services.name_agent import get_name_agent
 from app.services.persian_text import (
     has_persian_letters,
@@ -99,7 +100,7 @@ def polish_for_word(
         ]
 
     title = hazm_normalize(
-        normalize_persian(str(ai_doc.get("title") or "خروجی OCR فارسی — خط‌خوان"))
+        normalize_persian(str(ai_doc.get("title") or "خروجی OCR — خط‌خوان"))
     )
     words = list(analysis.valid_words)
     for extra in ai_doc.get("words") or []:
@@ -172,30 +173,49 @@ def _ai_polish_document(
 
     sample_lines = "\n".join(f"- {line}" for line in lines[:40])
     sample_rows = "\n".join(f"- {row}" for row in records[:25])
-    prompt = f"""You are a Persian document editor for Nasta'liq OCR Word export.
-Clean OCR noise into readable Persian Word text. Keep EVERY person/row. Do not invent people.
+    prompt = f"""You are a document editor for OCR Word export of ANY image content.
+Clean OCR noise into a faithful Word transcript. Preserve ALL visible content —
+words, numbers, names, dates, headings, table cells. Do not invent content.
+Do not reduce the page to only names.
 
 OCR lines:
 {sample_lines or '-'}
 
-Structured rows:
+Optional structured rows (only if present):
 {sample_rows or '-'}
 
 Return ONLY JSON:
 {{
-  "title": "short Persian document title",
-  "paragraphs": ["clean Persian paragraph 1", "paragraph 2"],
-  "words": ["valid Persian words or names"],
-  "notes": "one short Persian note about cleanup"
+  "title": "short document title matching the page",
+  "paragraphs": ["clean paragraph 1 matching page content", "paragraph 2"],
+  "words": ["important words/tokens from the page"],
+  "notes": "one short note about cleanup"
 }}
 
 Rules:
-- Persian script only in values.
-- paragraphs should be Word-ready, RTL logical order, no Chinese/Latin garbage.
-- Prefer corrected Iranian names when OCR is noisy.
-- Include one paragraph per deceased row when possible.
+- paragraphs must mirror the page content (not a name-only summary).
+- Keep digits, codes, Latin, and Persian as they appear when readable.
+- RTL logical order for Persian/Arabic; no Chinese garbage.
+- If structured rows exist, include them as paragraphs too — in addition to full text.
 """
     try:
+        cloud = get_cloud_ai()
+        if cloud.available:
+            data = cloud.complete_json(
+                prompt,
+                system=(
+                    "You clean Persian Nasta'liq OCR into Word-ready text and valid names. "
+                    "Return only JSON."
+                ),
+                timeout=timeout,
+                max_tokens=2400,
+            )
+            data["ai_available"] = True
+            data["model"] = cloud.label
+            return data
+
+        if not model:
+            return {"ai_available": False}
         with httpx.Client(timeout=timeout) as client:
             response = client.post(
                 f"{OLLAMA_URL.rstrip('/')}/api/generate",
@@ -219,6 +239,8 @@ Rules:
 
 
 def _pick_model(preferred: str) -> Optional[str]:
+    if get_cloud_ai().available:
+        return get_cloud_ai().label
     try:
         response = httpx.get(f"{OLLAMA_URL.rstrip('/')}/api/tags", timeout=3.0)
         response.raise_for_status()

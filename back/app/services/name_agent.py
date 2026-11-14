@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import httpx
 
+from app.services.cloud_ai import get_cloud_ai
 from app.services.iranian_names import (
     best_lexicon_matches,
     compare_to_lexicon,
@@ -85,6 +86,11 @@ class IranianNameAgent:
         self._ai_enabled = os.getenv("NAME_AGENT_AI", "1") != "0"
 
     def available(self) -> bool:
+        cloud = get_cloud_ai()
+        if self._ai_enabled and cloud.available:
+            self._active_model = cloud.label
+            self._ready = True
+            return True
         if self._ready is not None:
             return self._ready
         try:
@@ -312,21 +318,34 @@ Rules:
 - confidence 0..1.
 """
         try:
-            with httpx.Client(timeout=self.timeout) as client:
-                response = client.post(
-                    f"{self.base_url}/api/generate",
-                    json={
-                        "model": model,
-                        "prompt": prompt,
-                        "stream": False,
-                        "format": "json",
-                        "options": {"temperature": 0.0, "num_predict": 120},
-                    },
+            cloud = get_cloud_ai()
+            if cloud.available:
+                data = cloud.complete_json(
+                    prompt,
+                    system=(
+                        "You correct noisy Persian OCR into real Iranian given names. "
+                        "Return only JSON."
+                    ),
+                    timeout=self.timeout,
+                    max_tokens=200,
                 )
-                response.raise_for_status()
-                body = response.json()
-            text = (body.get("response") or "").strip()
-            data = _parse_json(text)
+                self._active_model = cloud.label
+            else:
+                with httpx.Client(timeout=self.timeout) as client:
+                    response = client.post(
+                        f"{self.base_url}/api/generate",
+                        json={
+                            "model": model,
+                            "prompt": prompt,
+                            "stream": False,
+                            "format": "json",
+                            "options": {"temperature": 0.0, "num_predict": 120},
+                        },
+                    )
+                    response.raise_for_status()
+                    body = response.json()
+                text = (body.get("response") or "").strip()
+                data = _parse_json(text)
             name = hazm_normalize(normalize_persian(str(data.get("valid_name") or "")))
             if name and re.search(r"[\u0600-\u06FF]{2,}", name):
                 return name

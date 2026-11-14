@@ -13,70 +13,6 @@ export type OcrWord = {
   line_index?: number
 }
 
-export type NameAlternative = {
-  name: string
-  similarity: number
-}
-
-export type ResolvedName = {
-  final_name: string
-  confidence: number
-  alternatives: NameAlternative[]
-  gender?: string
-  is_valid_iranian?: boolean
-  similarity?: number
-  source?: string
-  raw?: string
-}
-
-export type RowNameSimilarity = {
-  row_index: number
-  name: string
-  similarity: number
-}
-
-export type DeathRecord = {
-  row_index: number
-  deceased_name: ResolvedName
-  national_id: string
-  father_name: ResolvedName
-  cause_of_death: string
-  physician_name: ResolvedName
-  confidence: number
-  raw_line: string
-  name_similarities?: RowNameSimilarity[]
-}
-
-export type SimilarNamePair = {
-  left: string
-  right: string
-  similarity: number
-}
-
-export type AiNameEntry = {
-  raw: string
-  final_name: string
-  gender: string
-  is_valid_iranian: boolean
-  confidence: number
-  similarity: number
-  source: string
-}
-
-export type DeathRecordsPayload = {
-  records: DeathRecord[]
-  similar_name_pairs: SimilarNamePair[]
-  summary_text: string
-  confidence: number
-  details?: Record<string, unknown>
-  ai_names?: {
-    names: AiNameEntry[]
-    comparisons: SimilarNamePair[]
-    valid_words: string[]
-    details?: Record<string, unknown>
-  }
-}
-
 export type OcrJob = {
   id: number
   filename: string
@@ -85,12 +21,14 @@ export type OcrJob = {
   extracted_text: string | null
   lines: OcrLine[]
   words?: OcrWord[]
+  sentences?: string[]
   table: unknown
-  death_records: DeathRecordsPayload | null
+  death_records: unknown
   engine: string | null
   confidence: number | null
   error_message: string | null
   image_url: string | null
+  warning?: string | null
   created_at: string
   updated_at: string
 }

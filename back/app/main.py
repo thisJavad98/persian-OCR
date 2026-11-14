@@ -16,7 +16,7 @@ from app.services.ocr_engine import get_ocr_service
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
-    threading.Thread(target=get_ocr_service().warmup, daemon=True, name="ocr-warmup").start()
+    threading.Thread(target=get_ocr_service().warmup, daemon=True, name="ai-ocr-warmup").start()
     yield
 
 
@@ -24,8 +24,8 @@ settings = get_settings()
 
 app = FastAPI(
     title="Persian OCR API",
-    description="High-precision Persian handwriting and printed-text extraction",
-    version="1.0.0",
+    description="AI-only high-accuracy text extraction from any image",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -51,9 +51,9 @@ def health() -> HealthOut:
         db_ok = f"error: {exc}"
 
     return HealthOut(
-        status="ok" if db_ok == "ok" else "degraded",
+        status="ok" if db_ok == "ok" and service.ready else "degraded",
         database=db_ok,
         ocr_ready=service.ready,
         engines=service.engines,
-        details={"init_error": service.init_error},
+        details={"init_error": service.init_error, "mode": "ai-only"},
     )

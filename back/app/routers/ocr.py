@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import uuid
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import aiofiles
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -14,13 +14,9 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.database import get_db
 from app.models import OcrJob
-from app.schemas import DeathRecordsPayload, OcrJobOut, OcrLine, OcrTable, OcrWord
+from app.schemas import OcrJobOut, OcrLine, OcrWord
 from app.services.excel_export import build_excel
-from app.services.ocr_engine import LineResult, get_ocr_service
-from app.services.preprocess import enhance_for_ocr
-from app.services.row_slices import build_row_slices
-from app.services.table_structure import build_table, table_from_payload
-from app.services.word_ai import polish_for_word
+from app.services.ocr_engine import get_ocr_service
 from app.services.word_export import build_word
 
 router = APIRouter(prefix="/api/ocr", tags=["ocr"])
@@ -35,54 +31,14 @@ ALLOWED_TYPES = {
 }
 
 
-def _lines_from_job(job: OcrJob) -> list[LineResult]:
-    lines: list[LineResult] = []
-    if not job.lines_json:
-        return lines
-    try:
-        for item in json.loads(job.lines_json):
-            lines.append(
-                LineResult(
-                    text=item.get("text", ""),
-                    confidence=float(item.get("confidence", 0)),
-                    box=item.get("box"),
-                )
-            )
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return []
-    return lines
-
-
-def _table_for_job(job: OcrJob) -> OcrTable | None:
-    if job.table_json:
-        try:
-            grid = table_from_payload(json.loads(job.table_json))
-            if grid is not None:
-                return OcrTable.model_validate(grid.as_dict())
-        except (json.JSONDecodeError, ValueError, TypeError):
-            pass
-    return None
-
-
-def _records_for_job(job: OcrJob) -> DeathRecordsPayload | None:
+def _meta_from_job(job: OcrJob) -> dict[str, Any]:
     if not job.records_json:
-        return None
+        return {}
     try:
-        return DeathRecordsPayload.model_validate(json.loads(job.records_json))
-    except (json.JSONDecodeError, ValueError, TypeError):
-        return None
-
-
-def _words_from_records(job: OcrJob) -> list[OcrWord]:
-    records = _job_records_dict(job) or {}
-    raw_words = ((records.get("details") or {}).get("bina_words")) or []
-    words: list[OcrWord] = []
-    for item in raw_words:
-        try:
-            words.append(OcrWord.model_validate(item))
-        except (ValueError, TypeError):
-            continue
-    return words
+        data = json.loads(job.records_json)
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return {}
 
 
 def _serialize_job(job: OcrJob) -> OcrJobOut:
@@ -94,6 +50,17 @@ def _serialize_job(job: OcrJob) -> OcrJobOut:
         except (json.JSONDecodeError, ValueError):
             lines = []
 
+    meta = _meta_from_job(job)
+    words: list[OcrWord] = []
+    for item in meta.get("words") or []:
+        try:
+            words.append(OcrWord.model_validate(item))
+        except (ValueError, TypeError):
+            continue
+
+    sentences = [str(s) for s in (meta.get("sentences") or []) if str(s).strip()]
+    warning = meta.get("warning") or ((meta.get("details") or {}).get("warning"))
+
     return OcrJobOut(
         id=job.id,
         filename=job.filename,
@@ -101,12 +68,14 @@ def _serialize_job(job: OcrJob) -> OcrJobOut:
         status=job.status,
         extracted_text=job.extracted_text,
         lines=lines,
-        words=_words_from_records(job),
-        table=_table_for_job(job),
-        death_records=_records_for_job(job),
+        words=words,
+        sentences=sentences,
+        table=None,
+        death_records=None,
         engine=job.engine,
         confidence=job.confidence,
         error_message=job.error_message,
+        warning=str(warning) if warning else None,
         image_url=f"/api/ocr/{job.id}/image",
         created_at=job.created_at,
         updated_at=job.updated_at,
@@ -147,65 +116,32 @@ async def upload_and_extract(
     try:
         with Image.open(target) as image:
             image.load()
-            # 1) Upscale / enhance quality first, then extract words.
-            enhanced = enhance_for_ocr(image.copy())
-            enhanced_name = f"{Path(stored_name).stem}_enhanced.png"
-            enhanced_path = settings.upload_path / enhanced_name
-            enhanced.save(enhanced_path, format="PNG", optimize=True)
-
-            result = get_ocr_service().extract(enhanced.copy())
-
-            records_payload = result.death_records or {}
-            record_rows = list(records_payload.get("records") or [])
-            slice_count = len(record_rows) or max(len(result.lines), 1)
-            labels = []
-            for item in record_rows:
-                deceased = (item.get("deceased_name") or {}).get("final_name") or ""
-                raw = item.get("raw_line") or ""
-                labels.append(deceased or raw)
-            if not labels:
-                labels = [line.text for line in result.lines]
-
-            slice_dir = settings.upload_path / f"{Path(stored_name).stem}_slices"
-            slices = build_row_slices(
-                enhanced,
-                slice_count,
-                slice_dir,
-                labels=labels,
-            )
-            # Public URLs for UI + export metadata (absolute path kept for Excel/Word embed).
-            for item in slices:
-                item["url"] = f"/api/ocr/{job.id}/slice/{item['filename']}"
-            details = dict(records_payload.get("details") or {})
-            details["enhanced_image"] = enhanced_name
-            details["row_slices"] = slices
-            bina_words = [word.as_dict() for word in (result.words or [])]
-            details["bina_words"] = bina_words
-            details["bina"] = (result.details or {}).get("bina") or {
-                "word_count": len(bina_words),
-                "engine": result.engine,
-            }
-            # OCR AI polish for better Word export (cached on the job).
-            try:
-                details["word_ai"] = polish_for_word(
-                    full_text=result.text or "",
-                    lines=[line.text for line in result.lines],
-                    records=list(record_rows),
-                    words=[word.text for word in (result.words or [])],
+            # Light resize only — AI vision models handle document detail well.
+            rgb = image.convert("RGB")
+            max_side = max(960, int(settings.ocr_max_image_side or 1600))
+            w, h = rgb.size
+            scale = min(1.0, max_side / float(max(w, h)))
+            if scale < 1.0:
+                rgb = rgb.resize(
+                    (max(1, int(w * scale)), max(1, int(h * scale))),
+                    Image.Resampling.LANCZOS,
                 )
-            except Exception:
-                details["word_ai"] = {"ai_available": False, "paragraphs": [], "valid_words": []}
-            if result.death_records is not None:
-                result.death_records = dict(result.death_records)
-                result.death_records["details"] = details
-            else:
-                result.death_records = {
-                    "records": [],
-                    "similar_name_pairs": [],
-                    "summary_text": result.text or "",
-                    "confidence": result.confidence or 0.0,
-                    "details": details,
-                }
+
+            preview_name = f"{Path(stored_name).stem}_preview.jpg"
+            preview_path = settings.upload_path / preview_name
+            rgb.save(preview_path, format="JPEG", quality=90, optimize=True)
+
+            result = get_ocr_service().extract(rgb)
+
+        details = dict(result.details or {})
+        meta = {
+            "preview_image": preview_name,
+            "mode": "ai-only",
+            "sentences": list(result.sentences or []),
+            "words": [word.as_dict() for word in (result.words or [])],
+            "details": details,
+            "warning": details.get("warning"),
+        }
 
         job.status = "completed"
         job.extracted_text = result.text
@@ -223,34 +159,13 @@ async def upload_and_extract(
             ],
             ensure_ascii=False,
         )
-        if result.death_records:
-            job.records_json = json.dumps(result.death_records, ensure_ascii=False)
-            job.table_json = None
-        elif result.table_rows:
-            from app.services.table_structure import TableCell, TableGrid
-
-            rows = result.table_rows
-            cells = [
-                TableCell(text=cell, confidence=result.confidence, row=r, col=c)
-                for r, row in enumerate(rows)
-                for c, cell in enumerate(row)
-                if str(cell).strip()
-            ]
-            table = TableGrid(
-                rows=rows,
-                cells=cells,
-                row_count=len(rows),
-                col_count=max((len(row) for row in rows), default=0),
-            )
-            job.table_json = json.dumps(table.as_dict(), ensure_ascii=False)
-        else:
-            table = build_table(result.lines)
-            job.table_json = json.dumps(table.as_dict(), ensure_ascii=False) if table.rows else None
+        job.table_json = None
+        job.records_json = json.dumps(meta, ensure_ascii=False)
         job.error_message = None
     except UnidentifiedImageError:
         job.status = "failed"
         job.error_message = "Uploaded file is not a readable image."
-    except Exception as exc:  # pragma: no cover - runtime OCR failures
+    except Exception as exc:  # pragma: no cover
         job.status = "failed"
         job.error_message = str(exc)
 
@@ -273,42 +188,26 @@ def get_job_image(job_id: int, db: Session = Depends(get_db)) -> FileResponse:
     job = db.get(OcrJob, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
-    # Prefer enhanced image when available.
-    enhanced = settings.upload_path / f"{Path(job.stored_name).stem}_enhanced.png"
-    path = enhanced if enhanced.exists() else settings.upload_path / job.stored_name
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Image file missing.")
-    media = "image/png" if path.suffix.lower() == ".png" else job.mime_type
-    return FileResponse(path, media_type=media, filename=path.name)
 
+    stem = Path(job.stored_name).stem
+    for candidate in (
+        settings.upload_path / f"{stem}_preview.jpg",
+        settings.upload_path / f"{stem}_enhanced.jpg",
+        settings.upload_path / f"{stem}_enhanced.png",
+        settings.upload_path / job.stored_name,
+    ):
+        if candidate.exists():
+            suffix = candidate.suffix.lower()
+            media = (
+                "image/png"
+                if suffix == ".png"
+                else "image/jpeg"
+                if suffix in {".jpg", ".jpeg"}
+                else job.mime_type
+            )
+            return FileResponse(candidate, media_type=media, filename=candidate.name)
 
-@router.get("/{job_id}/slice/{slice_name}")
-def get_job_slice(job_id: int, slice_name: str, db: Session = Depends(get_db)) -> FileResponse:
-    settings = get_settings()
-    job = db.get(OcrJob, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found.")
-    safe_name = Path(slice_name).name
-    if not safe_name.startswith("row-") or not safe_name.endswith(".png"):
-        raise HTTPException(status_code=400, detail="Invalid slice name.")
-    path = settings.upload_path / f"{Path(job.stored_name).stem}_slices" / safe_name
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Slice not found.")
-    return FileResponse(path, media_type="image/png", filename=safe_name)
-
-
-def _job_records_dict(job: OcrJob) -> Optional[dict[str, Any]]:
-    if not job.records_json:
-        return None
-    try:
-        return json.loads(job.records_json)
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return None
-
-
-def _bina_words_from_job(job: OcrJob) -> list[dict[str, Any]]:
-    records = _job_records_dict(job) or {}
-    return list(((records.get("details") or {}).get("bina_words")) or [])
+    raise HTTPException(status_code=404, detail="Image file missing.")
 
 
 @router.get("/{job_id}/excel")
@@ -319,81 +218,58 @@ def download_excel(job_id: int, db: Session = Depends(get_db)) -> Response:
     if job.status != "completed":
         raise HTTPException(status_code=400, detail="OCR is not completed yet.")
 
-    lines = _lines_from_job(job)
-    table = None
-    if job.table_json:
+    meta = _meta_from_job(job)
+    lines = []
+    if job.lines_json:
         try:
-            table = table_from_payload(json.loads(job.table_json))
+            lines = json.loads(job.lines_json)
         except (json.JSONDecodeError, TypeError, ValueError):
-            table = None
+            lines = []
 
-    records = _job_records_dict(job)
-    slices = ((records or {}).get("details") or {}).get("row_slices") or []
     payload = build_excel(
         filename=job.filename,
         full_text=job.extracted_text or "",
         lines=lines,
+        words=meta.get("words") or [],
+        sentences=meta.get("sentences") or [],
         confidence=job.confidence,
         engine=job.engine,
-        table=table,
-        death_records=records,
-        min_confidence=get_settings().ocr_min_confidence,
-        row_slices=slices,
-        bina_words=_bina_words_from_job(job),
     )
-    download_name = f"deceased-list-{job.id}.xlsx"
     return Response(
         content=payload,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{download_name}"'},
+        headers={"Content-Disposition": f'attachment; filename="ocr-{job.id}.xlsx"'},
     )
 
 
 @router.get("/{job_id}/word")
 def download_word(job_id: int, db: Session = Depends(get_db)) -> Response:
-    """Word export of AI-validated Persian / Nasta'liq names (i2OCR-style deliverable)."""
     job = db.get(OcrJob, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
     if job.status != "completed":
         raise HTTPException(status_code=400, detail="OCR is not completed yet.")
 
-    records = _job_records_dict(job)
-    slices = ((records or {}).get("details") or {}).get("row_slices") or []
-    line_texts = [line.text for line in _lines_from_job(job)]
-    bina_words = _bina_words_from_job(job)
-    word_texts = [str(item.get("text") or "") for item in bina_words if item.get("text")]
-    # Refresh Word AI polish on download when cache is empty.
-    if records is not None:
-        details = dict(records.get("details") or {})
-        if not (details.get("word_ai") or {}).get("paragraphs"):
-            try:
-                details["word_ai"] = polish_for_word(
-                    full_text=job.extracted_text or "",
-                    lines=line_texts,
-                    records=list(records.get("records") or []),
-                    words=word_texts,
-                )
-                records["details"] = details
-                job.records_json = json.dumps(records, ensure_ascii=False)
-                db.commit()
-            except Exception:
-                pass
+    meta = _meta_from_job(job)
+    line_texts: list[str] = []
+    if job.lines_json:
+        try:
+            for item in json.loads(job.lines_json):
+                if isinstance(item, dict) and item.get("text"):
+                    line_texts.append(str(item["text"]))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            line_texts = []
     payload = build_word(
         filename=job.filename,
         full_text=job.extracted_text or "",
-        death_records=records,
+        lines=line_texts,
+        words=[str(w.get("text")) for w in (meta.get("words") or []) if w.get("text")],
+        sentences=meta.get("sentences") or [],
         engine=job.engine,
         confidence=job.confidence,
-        row_slices=slices,
-        lines=line_texts,
-        words=word_texts,
-        bina_words=bina_words,
-        use_ai=True,
     )
-    download_name = f"nastaliq-names-{job.id}.docx"
     return Response(
         content=payload,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": f'attachment; filename="{download_name}"'},
+        headers={"Content-Disposition": f'attachment; filename="ocr-{job.id}.docx"'},
     )

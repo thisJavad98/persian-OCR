@@ -28,7 +28,11 @@ func PrepareToTemp(workspace string, raw []byte, maxSide int) (path string, clea
 	if scale < 1.0 {
 		nw := max(1, int(float64(w)*scale))
 		nh := max(1, int(float64(h)*scale))
-		img = imaging.Resize(img, nw, nh, imaging.Lanczos)
+		filter := imaging.Lanczos
+		if scale < 0.75 {
+			filter = imaging.Linear
+		}
+		img = imaging.Resize(img, nw, nh, filter)
 	}
 
 	scratch := filepath.Join(workspace, ".scratch")
@@ -40,7 +44,7 @@ func PrepareToTemp(workspace string, raw []byte, maxSide int) (path string, clea
 		return "", nil, err
 	}
 	path = f.Name()
-	if err := imaging.Encode(f, img, imaging.JPEG, imaging.JPEGQuality(90)); err != nil {
+	if err := imaging.Encode(f, img, imaging.JPEG, imaging.JPEGQuality(85)); err != nil {
 		_ = f.Close()
 		_ = os.Remove(path)
 		return "", nil, err

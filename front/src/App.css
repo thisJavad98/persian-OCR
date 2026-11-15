@@ -98,7 +98,7 @@ a {
 .frame {
   min-height: 100svh;
   display: grid;
-  grid-template-rows: 52px minmax(0, 1fr);
+  grid-template-rows: 52px auto minmax(0, 1fr);
   background: var(--ground);
 }
 
@@ -110,6 +110,70 @@ a {
   padding: 0 16px 0 20px;
   background: var(--ground);
   border-bottom: 1px solid var(--rule);
+}
+
+.cursor-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 20px;
+  font-size: var(--fs-small);
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface);
+  flex-wrap: wrap;
+}
+
+.cursor-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex-shrink: 0;
+}
+
+.cursor-status.is-on .cursor-status-dot {
+  background: var(--positive);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--positive) 25%, transparent);
+}
+
+.cursor-status.is-off .cursor-status-dot {
+  background: var(--negative);
+}
+
+.cursor-status.is-warn .cursor-status-dot {
+  background: var(--warning);
+}
+
+.cursor-status-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+}
+
+.cursor-status-refresh {
+  font: inherit;
+  font-size: var(--fs-small);
+  color: var(--accent);
+  background: transparent;
+  border: none;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.cursor-status-refresh:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 640px) {
+  .cursor-status {
+    padding-inline: 16px;
+  }
+
+  .cursor-status-refresh {
+    width: 100%;
+    text-align: start;
+    padding-inline: 0;
+  }
 }
 
 .brand {

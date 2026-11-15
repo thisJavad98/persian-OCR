@@ -63,21 +63,23 @@ func (s *Server) Routes() chi.Router {
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
-	ready := s.cursor.Available()
+	st := s.cursor.Status()
 	status := "ok"
-	if !ready {
+	if !st.Ready {
 		status = "degraded"
 	}
-	initErr := s.cursor.InitError()
 	var init any
-	if initErr != "" {
-		init = initErr
+	if st.Error != "" {
+		init = st.Error
 	}
 	writeJSON(w, http.StatusOK, HealthOut{
-		Status:   status,
-		Database: "none",
-		OCRReady: ready,
-		Engines:  s.cursor.Engines(),
+		Status:          status,
+		Database:        "none",
+		OCRReady:        st.Ready,
+		Engines:         s.cursor.Engines(),
+		CursorConnected: st.Ready,
+		CursorAuthVia:   st.AuthVia,
+		CursorModel:     st.Model,
 		Details: map[string]any{
 			"init_error": init,
 			"mode":       "cursor-only",
@@ -92,7 +94,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
+	if err := r.ParseMultipartForm(20 << 20); err != nil {
 		writeJSON(w, http.StatusBadRequest, ErrorDetail{Detail: "Invalid multipart form."})
 		return
 	}
@@ -123,7 +125,10 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 		filename = "upload.png"
 	}
 
-	maxSide := max(960, s.cfg.OCRMaxImageSide)
+	maxSide := s.cfg.OCRMaxImageSide
+	if maxSide < 720 {
+		maxSide = 720
+	}
 	tmpPath, cleanup, err := imageutil.PrepareToTemp(s.root, raw, maxSide)
 	if err != nil {
 		writeJSON(w, http.StatusOK, failedOut(filename, contentType, "Uploaded file is not a readable image."))
@@ -131,7 +136,8 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cleanup()
 
-	ocrCtx, cancel := context.WithTimeout(r.Context(), time.Duration(s.cfg.CursorOCRTimeout*float64(time.Second)))
+	// Detach from client disconnect; full timeout + retries handled inside cursor.Service.
+	ocrCtx, cancel := context.WithTimeout(context.Background(), time.Duration((s.cfg.CursorOCRTimeout*float64(1+s.cfg.CursorOCRRetries)+30)*float64(time.Second)))
 	defer cancel()
 
 	result, err := s.cursor.Extract(ocrCtx, tmpPath)

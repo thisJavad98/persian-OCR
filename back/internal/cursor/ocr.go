@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -15,30 +16,12 @@ import (
 	"github.com/javad-moghofei/persian-ocr/back/internal/config"
 )
 
-const ocrPrompt = `You are a world-class OCR engine for Persian/Farsi (including Nasta'liq), Arabic, and any document image.
+const ocrPrompt = `OCR this image file (relative to workspace): %s
 
-Open and carefully read this image file:
-%s
+Transcribe ALL visible text exactly (Persian/Arabic logical order, keep digits and Latin).
 
-Transcribe EVERY visible character, word, digit, and punctuation exactly as written.
-Do not summarize. Do not invent. Do not skip faint or edge text.
-
-Return ONLY valid JSON (no markdown fences, no commentary):
-{
-  "text": "full page transcript with natural line breaks",
-  "lines": ["line 1", "line 2"],
-  "words": ["word1", "word2"],
-  "sentences": ["sentence 1"],
-  "confidence": 0.0
-}
-
-Rules:
-- Persian/Arabic in LOGICAL reading order.
-- Keep numbers, IDs, dates, Latin, and punctuation.
-- lines = every visual text line top-to-bottom.
-- words = tokens in reading order.
-- sentences = grammatical sentences or clear phrases from the page.
-- confidence is 0..1.
+Return ONLY JSON:
+{"text":"","lines":[],"words":[],"sentences":[],"confidence":0.0}
 `
 
 type Result struct {
@@ -49,6 +32,14 @@ type Result struct {
 	Confidence float64  `json:"confidence"`
 	Engine     string   `json:"engine"`
 	Raw        string   `json:"raw,omitempty"`
+}
+
+type Status struct {
+	Ready      bool   `json:"ready"`
+	Engine     string `json:"engine"`
+	AuthVia    string `json:"auth_via"`
+	Model      string `json:"model"`
+	Error      string `json:"error,omitempty"`
 }
 
 type Service struct {
@@ -81,6 +72,26 @@ func (s *Service) Available() bool {
 	return s.loggedIn()
 }
 
+func (s *Service) Status() Status {
+	st := Status{
+		Ready: s.Available(),
+		Model: s.cfg.CursorOCRModel,
+	}
+	if s.cfg.CursorAPIKey != "" {
+		st.AuthVia = "api_key"
+	} else if s.agentBinary() != "" {
+		st.AuthVia = "cli"
+	} else {
+		st.AuthVia = "none"
+	}
+	if st.Ready {
+		st.Engine = s.EngineLabel()
+	} else {
+		st.Error = s.InitError()
+	}
+	return st
+}
+
 func (s *Service) InitError() string {
 	if s.Available() {
 		return ""
@@ -101,7 +112,48 @@ func (s *Service) Engines() []string {
 	return nil
 }
 
-func (s *Service) Extract(ctx context.Context, imagePath string) (*Result, error) {
+func (s *Service) InvalidateAuthCache() {
+	s.mu.Lock()
+	s.loggedInCache = nil
+	s.mu.Unlock()
+}
+
+func (s *Service) Extract(parent context.Context, imagePath string) (*Result, error) {
+	return s.extractWithRetry(parent, imagePath, s.cfg.CursorOCRRetries)
+}
+
+func (s *Service) extractWithRetry(parent context.Context, imagePath string, retries int) (*Result, error) {
+	var last error
+	attempts := retries + 1
+	if attempts < 1 {
+		attempts = 1
+	}
+	perAttempt := time.Duration(s.cfg.CursorOCRTimeout * float64(time.Second))
+
+	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-parent.Done():
+				return nil, friendlyError(parent.Err())
+			case <-time.After(1500 * time.Millisecond):
+			}
+		}
+		attemptCtx, cancel := context.WithTimeout(parent, perAttempt)
+		res, err := s.extractOnce(attemptCtx, imagePath)
+		cancel()
+		if err == nil {
+			return res, nil
+		}
+		last = err
+		if !isRetryable(err) || attempt == attempts-1 {
+			break
+		}
+		s.InvalidateAuthCache()
+	}
+	return nil, friendlyError(last)
+}
+
+func (s *Service) extractOnce(ctx context.Context, imagePath string) (*Result, error) {
 	binary := s.agentBinary()
 	if binary == "" {
 		return nil, fmt.Errorf("cursor-agent CLI not found on PATH")
@@ -116,29 +168,42 @@ func (s *Service) Extract(ctx context.Context, imagePath string) (*Result, error
 	if err != nil {
 		rel = imagePath
 	}
+	rel = filepath.ToSlash(rel)
 
 	prompt := fmt.Sprintf(ocrPrompt, rel)
-	timeout := time.Duration(s.cfg.CursorOCRTimeout * float64(time.Second))
-	cmd := s.buildCommand(ctx, binary, root, prompt, timeout)
+	cmd := s.buildCommand(ctx, binary, root, prompt)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	cmd.Dir = root
 
-	if err := cmd.Run(); err != nil {
-		out := strings.TrimSpace(stdout.String())
+	runErr := cmd.Run()
+	out := strings.TrimSpace(stdout.String())
+	errText := strings.TrimSpace(stderr.String())
+
+	if runErr != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if out == "" {
-			return nil, fmt.Errorf("cursor-agent failed: %s", trim(stderr.String(), 500))
+			combined := errText
+			if combined == "" {
+				combined = runErr.Error()
+			}
+			return nil, fmt.Errorf("%s", combined)
 		}
 	}
 
-	out := strings.TrimSpace(stdout.String())
 	data := parseAgentJSON(out)
 	if data.Text == "" && len(data.Lines) == 0 {
 		cleaned := stripNoise(out)
 		if cleaned == "" {
-			return nil, fmt.Errorf("cursor-agent returned no OCR payload: %s", trim(out, 400))
+			msg := trim(out, 400)
+			if msg == "" && errText != "" {
+				msg = trim(errText, 400)
+			}
+			return nil, fmt.Errorf("cursor-agent returned no OCR payload: %s", msg)
 		}
 		data = &Result{
 			Text:       cleaned,
@@ -152,8 +217,7 @@ func (s *Service) Extract(ctx context.Context, imagePath string) (*Result, error
 	return data, nil
 }
 
-func (s *Service) buildCommand(ctx context.Context, binary, root, prompt string, timeout time.Duration) *exec.Cmd {
-	ctx, _ = context.WithTimeout(ctx, timeout)
+func (s *Service) buildCommand(ctx context.Context, binary, root, prompt string) *exec.Cmd {
 	args := []string{
 		"--mode", "ask",
 		"-p",
@@ -167,6 +231,33 @@ func (s *Service) buildCommand(ctx context.Context, binary, root, prompt string,
 	}
 	args = append(args, prompt)
 	return exec.CommandContext(ctx, binary, args...)
+}
+
+func isRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "timeout") ||
+		strings.Contains(msg, "temporarily") ||
+		strings.Contains(msg, "503") ||
+		strings.Contains(msg, "no ocr payload")
+}
+
+func friendlyError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("زمان OCR تمام شد؛ تصویر کوچک‌تر بفرستید یا CURSOR_OCR_TIMEOUT را بالا ببرید")
+	}
+	if errors.Is(err, context.Canceled) {
+		return fmt.Errorf("OCR لغو شد")
+	}
+	return err
 }
 
 func (s *Service) agentBinary() string {
@@ -194,7 +285,9 @@ func (s *Service) loggedIn() bool {
 		s.loggedInCache = &f
 		return false
 	}
-	proc := exec.Command(binary, "status")
+	statusCtx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	proc := exec.CommandContext(statusCtx, binary, "status")
 	out, err := proc.CombinedOutput()
 	ok := false
 	if err == nil {
@@ -252,7 +345,7 @@ func stripNoise(text string) string {
 	if strings.HasPrefix(cleaned, "```") {
 		re := regexp.MustCompile(`(?s)^` + "```" + `(?:json)?\s*`)
 		cleaned = re.ReplaceAllString(cleaned, "")
-		cleaned = regexp.MustCompile(`(?s)\s*`+"```"+`$`).ReplaceAllString(cleaned, "")
+		cleaned = regexp.MustCompile(`(?s)\s*` + "```" + `$`).ReplaceAllString(cleaned, "")
 	}
 	return strings.TrimSpace(cleaned)
 }

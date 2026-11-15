@@ -37,6 +37,24 @@ export async function logout(): Promise<void> {
   await fetch('/api/auth/logout', { ...apiInit, method: 'POST' })
 }
 
+export type HealthStatus = {
+  status: string
+  ocr_ready: boolean
+  cursor_connected: boolean
+  cursor_auth_via: string
+  cursor_model: string
+  engines: string[]
+  details?: { init_error?: string | null }
+}
+
+export async function fetchHealth(): Promise<HealthStatus> {
+  const response = await fetch('/api/health', apiInit)
+  if (!response.ok) {
+    throw new Error('وضعیت سرور در دسترس نیست.')
+  }
+  return response.json()
+}
+
 export type OcrJob = {
   filename: string
   mime_type: string
@@ -53,14 +71,24 @@ export type OcrJob = {
   warning?: string | null
 }
 
+const OCR_UPLOAD_TIMEOUT_MS = 12 * 60 * 1000
+
 export async function uploadImage(file: File): Promise<OcrJob> {
   const body = new FormData()
   body.append('file', file)
-  const response = await fetch('/api/ocr/upload', {
-    ...apiInit,
-    method: 'POST',
-    body,
-  })
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), OCR_UPLOAD_TIMEOUT_MS)
+  let response: Response
+  try {
+    response = await fetch('/api/ocr/upload', {
+      ...apiInit,
+      method: 'POST',
+      body,
+      signal: controller.signal,
+    })
+  } finally {
+    window.clearTimeout(timer)
+  }
   if (!response.ok) {
     const detail = await response.json().catch(() => null)
     throw new Error(detail?.detail || 'بارگذاری تصویر ناموفق بود.')

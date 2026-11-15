@@ -1,5 +1,5 @@
-import { useRef, useState, type ChangeEvent, type DragEvent } from "react";
-import { downloadExcel, downloadWord, uploadImage, type OcrJob } from "./api";
+import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
+import { downloadExcel, downloadWord, fetchHealth, uploadImage, type HealthStatus, type OcrJob } from "./api";
 import "./App.css";
 
 type UiState = "idle" | "uploading" | "ready" | "error";
@@ -21,6 +21,30 @@ function App({ onLogout }: AppProps) {
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [exporting, setExporting] = useState<"excel" | "word" | null>(null);
+  const [health, setHealth] = useState<HealthStatus | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const refresh = async () => {
+      try {
+        const data = await fetchHealth();
+        if (!alive) return;
+        setHealth(data);
+        setHealthError(null);
+      } catch {
+        if (!alive) return;
+        setHealth(null);
+        setHealthError("اتصال به سرور برقرار نیست.");
+      }
+    };
+    void refresh();
+    const id = window.setInterval(() => void refresh(), 20_000);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, []);
 
   async function processFile(file: File) {
     if (!file.type.startsWith("image/")) {
@@ -35,6 +59,15 @@ function App({ onLogout }: AppProps) {
     setError(null);
     setUiState("uploading");
 
+    if (health && !health.cursor_connected) {
+      setError(
+        health.details?.init_error ||
+          "Cursor وصل نیست. CURSOR_API_KEY یا cursor-agent login را چک کنید.",
+      );
+      setUiState("error");
+      return;
+    }
+
     try {
       const result = await uploadImage(file);
       setJob(result);
@@ -44,9 +77,12 @@ function App({ onLogout }: AppProps) {
         return;
       }
       setUiState("ready");
+      void fetchHealth().then(setHealth).catch(() => undefined);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "خطای ناشناخته");
+      const msg = err instanceof Error ? err.message : "خطای ناشناخته";
+      setError(msg.includes("fetch") || msg.includes("aborted") ? "زمان OCR تمام شد؛ دوباره تلاش کنید." : msg);
       setUiState("error");
+      void fetchHealth().then(setHealth).catch(() => undefined);
     }
   }
 
@@ -134,6 +170,26 @@ function App({ onLogout }: AppProps) {
           </button>
         </div>
       </header>
+
+      <div
+        className={`cursor-status ${health?.cursor_connected ? "is-on" : healthError ? "is-warn" : "is-off"}`}
+        role="status"
+        aria-live="polite"
+      >
+        <span className="cursor-status-dot" aria-hidden="true" />
+        <span className="cursor-status-text">
+          {healthError
+            ? healthError
+            : health?.cursor_connected
+              ? `Cursor متصل · ${health.cursor_model}${health.cursor_auth_via === "api_key" ? " · API" : " · CLI"}`
+              : health?.details?.init_error
+                ? `Cursor قطع · ${health.details.init_error}`
+                : "در حال بررسی Cursor…"}
+        </span>
+        <button type="button" className="cursor-status-refresh" onClick={() => void fetchHealth().then(setHealth)}>
+          بروزرسانی
+        </button>
+      </div>
 
       <main className="sheet">
         <div className="title-row">

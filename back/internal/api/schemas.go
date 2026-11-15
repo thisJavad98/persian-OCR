@@ -42,11 +42,14 @@ type ExportIn struct {
 }
 
 type HealthOut struct {
-	Status   string         `json:"status"`
-	Database string         `json:"database"`
-	OCRReady bool           `json:"ocr_ready"`
-	Engines  []string       `json:"engines"`
-	Details  map[string]any `json:"details"`
+	Status          string         `json:"status"`
+	Database        string         `json:"database"`
+	OCRReady        bool           `json:"ocr_ready"`
+	Engines         []string       `json:"engines"`
+	CursorConnected bool           `json:"cursor_connected"`
+	CursorAuthVia   string         `json:"cursor_auth_via"`
+	CursorModel     string         `json:"cursor_model"`
+	Details         map[string]any `json:"details"`
 }
 
 type ErrorDetail struct {

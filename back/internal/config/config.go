@@ -16,6 +16,7 @@ type Config struct {
 	OCRUseCursor     bool
 	CursorOCRModel   string
 	CursorOCRTimeout float64
+	CursorOCRRetries int
 	CursorAPIKey     string
 	AuthUsername     string
 	AuthPassword     string
@@ -30,17 +31,24 @@ func Load() (*Config, error) {
 		useCursor = "1"
 	}
 
-	maxSide := 1600
+	maxSide := 1280
 	if v := strings.TrimSpace(os.Getenv("OCR_MAX_IMAGE_SIDE")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			maxSide = n
 		}
 	}
 
-	timeout := 180.0
+	timeout := 420.0
 	if v := strings.TrimSpace(os.Getenv("CURSOR_OCR_TIMEOUT")); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
 			timeout = f
+		}
+	}
+
+	retries := 1
+	if v := strings.TrimSpace(os.Getenv("CURSOR_OCR_RETRIES")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			retries = n
 		}
 	}
 
@@ -65,6 +73,7 @@ func Load() (*Config, error) {
 		OCRUseCursor:     useCursor != "0",
 		CursorOCRModel:   model,
 		CursorOCRTimeout: timeout,
+		CursorOCRRetries: retries,
 		CursorAPIKey:     strings.TrimSpace(os.Getenv("CURSOR_API_KEY")),
 		AuthUsername:     envOr("AUTH_USERNAME", "alifaghihi123"),
 		AuthPassword:     envOr("AUTH_PASSWORD", "AliFaghihi@123"),

@@ -136,6 +136,9 @@ func (c *Config) HandwritingDBPath(workspace string) string {
 	if c.HandwritingDB != "" {
 		return c.HandwritingDB
 	}
+	if os.Getenv("VERCEL") == "1" && c.DatabaseURL == "" {
+		return filepath.Join(os.TempDir(), "handwriting.db")
+	}
 	return filepath.Join(workspace, ".data", "handwriting.db")
 }
 

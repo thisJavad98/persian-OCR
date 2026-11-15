@@ -112,6 +112,14 @@ a {
   border-bottom: 1px solid var(--rule);
 }
 
+.status-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-height: 0;
+  border-bottom: 1px solid var(--rule);
+}
+
 .cursor-status {
   display: flex;
   align-items: center;
@@ -121,6 +129,14 @@ a {
   border-bottom: 1px solid var(--rule);
   background: var(--surface);
   flex-wrap: wrap;
+}
+
+.status-stack .cursor-status {
+  border-bottom: none;
+}
+
+.status-stack .hw-banner {
+  border-bottom: none;
 }
 
 .cursor-status-dot {
@@ -857,10 +873,11 @@ a {
   display: flex;
   align-items: center;
   gap: 10px;
-  height: auto;
-  max-height: 36px;
+  min-height: var(--control-height);
+  max-height: var(--control-height);
   padding: 0 20px;
   overflow: hidden;
+  flex-shrink: 0;
   border-bottom: 1px solid var(--rule);
   background: color-mix(in srgb, var(--accent) 6%, var(--surface));
   box-shadow: inset 0 1px 0 color-mix(in srgb, var(--accent) 45%, transparent); /* taste-skill-ignore: calibration strip */

@@ -34,18 +34,29 @@ type Server struct {
 	hw      *handwriting.Store
 }
 
-func NewServer(cfg *config.Config, root string) *Server {
+func (s *Server) Close() error {
+	if s.hw == nil {
+		return nil
+	}
+	return s.hw.Close()
+}
+
+func NewServer(cfg *config.Config, root string) (*Server, error) {
 	sess := auth.NewSession(auth.Credentials{
 		Username: cfg.AuthUsername,
 		Password: cfg.AuthPassword,
 	}, cfg.SessionSecret)
+	hw, err := handwriting.NewStore(root, cfg.HandwritingDBPath(root))
+	if err != nil {
+		return nil, err
+	}
 	return &Server{
 		cfg:     cfg,
 		cursor:  cursor.NewService(cfg, root),
 		root:    root,
 		session: sess,
-		hw:      handwriting.NewStore(),
-	}
+		hw:      hw,
+	}, nil
 }
 
 func (s *Server) Routes() chi.Router {

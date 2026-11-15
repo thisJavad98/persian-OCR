@@ -29,7 +29,10 @@ func (s *Server) handwritingClear(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, ErrorDetail{Detail: "ورود لازم است."})
 		return
 	}
-	s.hw.Clear(user)
+	if err := s.hw.Clear(user); err != nil {
+		writeJSON(w, http.StatusInternalServerError, ErrorDetail{Detail: err.Error()})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -93,8 +96,12 @@ func (s *Server) handwritingTrain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dir := filepath.Join(s.root, ".scratch", "handwriting", user)
+	dir := handwriting.UserDataDir(s.root, user)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
+		writeJSON(w, http.StatusInternalServerError, ErrorDetail{Detail: err.Error()})
+		return
+	}
+	if err := handwriting.SaveReferenceExcel(s.root, user, xlsRaw); err != nil {
 		writeJSON(w, http.StatusInternalServerError, ErrorDetail{Detail: err.Error()})
 		return
 	}
@@ -138,7 +145,10 @@ func (s *Server) handwritingTrain(w http.ResponseWriter, r *http.Request) {
 		ReferenceGrid:  grid,
 		StyleNotes:     notes,
 	}
-	s.hw.Set(user, prof)
+	if err := s.hw.Set(user, prof); err != nil {
+		writeJSON(w, http.StatusInternalServerError, ErrorDetail{Detail: err.Error()})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":     true,
 		"status": s.hw.Status(user),

@@ -22,7 +22,11 @@ func main() {
 		log.Fatalf("cwd: %v", err)
 	}
 
-	srv := api.NewServer(cfg, root)
+	srv, err := api.NewServer(cfg, root)
+	if err != nil {
+		log.Fatalf("handwriting store: %v", err)
+	}
+	defer func() { _ = srv.Close() }()
 	router := srv.Routes()
 
 	corsMw := cors.Handler(cors.Options{

@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -21,6 +22,7 @@ type Config struct {
 	AuthUsername     string
 	AuthPassword     string
 	SessionSecret    string
+	HandwritingDB    string
 }
 
 func Load() (*Config, error) {
@@ -65,6 +67,8 @@ func Load() (*Config, error) {
 		origins = "http://localhost:5173,http://127.0.0.1:5173"
 	}
 
+	hwDB := strings.TrimSpace(os.Getenv("HANDWRITING_DB_PATH"))
+
 	return &Config{
 		CORSOrigins:      splitCSV(origins),
 		OCRMaxImageSide:  maxSide,
@@ -78,7 +82,15 @@ func Load() (*Config, error) {
 		AuthUsername:     envOr("AUTH_USERNAME", "alifaghihi123"),
 		AuthPassword:     envOr("AUTH_PASSWORD", "AliFaghihi@123"),
 		SessionSecret:    envOr("SESSION_SECRET", ""),
+		HandwritingDB:    hwDB,
 	}, nil
+}
+
+func (c *Config) HandwritingDBPath(workspace string) string {
+	if c.HandwritingDB != "" {
+		return c.HandwritingDB
+	}
+	return filepath.Join(workspace, ".data", "handwriting.db")
 }
 
 func envOr(key, fallback string) string {

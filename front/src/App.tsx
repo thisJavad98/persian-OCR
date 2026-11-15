@@ -279,53 +279,55 @@ function App({ onLogout }: AppProps) {
         </div>
       </header>
 
-      <div
-        className={`cursor-status ${health?.cursor_connected ? "is-on" : healthError ? "is-warn" : "is-off"}`}
-        role="status"
-        aria-live="polite"
-      >
-        <span className="cursor-status-dot" aria-hidden="true" />
-        <span className="cursor-status-text">
-          {healthError
-            ? healthError
-            : health?.cursor_connected
-              ? `Cursor متصل · ${health.cursor_model}${health.cursor_auth_via === "api_key" ? " · API" : " · CLI"}`
-              : health?.details?.init_error
-                ? `Cursor قطع · ${health.details.init_error}`
-                : "در حال بررسی Cursor…"}
-        </span>
-        <button type="button" className="cursor-status-refresh" onClick={() => void fetchHealth().then(setHealth)}>
-          بروزرسانی
-        </button>
-      </div>
-
-      {hwStatus?.active && (
-        <div className="hw-banner" role="status" aria-live="polite">
-          <span className="hw-banner-dot" aria-hidden="true" />
-          <p className="hw-banner-line">
-            <span className="hw-banner-tag">دست‌خط فعال</span>
-            <span className="hw-banner-sep" aria-hidden="true">
-              ·
-            </span>
-            <span className="hw-banner-text">
-              {hwStatus.message || "استخراج‌های بعدی با نمونهٔ ثبت‌شده دقیق‌تر می‌شوند."}
-            </span>
-            {(hwStatus.sample_filename || hwStatus.excel_filename) && (
-              <>
-                <span className="hw-banner-sep" aria-hidden="true">
-                  ·
-                </span>
-                <span className="hw-banner-files" dir="ltr">
-                  {[hwStatus.sample_filename, hwStatus.excel_filename].filter(Boolean).join(" · ")}
-                </span>
-              </>
-            )}
-          </p>
-          <button type="button" className="hw-banner-action" onClick={() => openHwModal()}>
-            مدیریت نمونه
+      <div className="status-stack">
+        <div
+          className={`cursor-status ${health?.cursor_connected ? "is-on" : healthError ? "is-warn" : "is-off"}`}
+          role="status"
+          aria-live="polite"
+        >
+          <span className="cursor-status-dot" aria-hidden="true" />
+          <span className="cursor-status-text">
+            {healthError
+              ? healthError
+              : health?.cursor_connected
+                ? `Cursor متصل · ${health.cursor_model}${health.cursor_auth_via === "api_key" ? " · API" : " · CLI"}`
+                : health?.details?.init_error
+                  ? `Cursor قطع · ${health.details.init_error}`
+                  : "در حال بررسی Cursor…"}
+          </span>
+          <button type="button" className="cursor-status-refresh" onClick={() => void fetchHealth().then(setHealth)}>
+            بروزرسانی
           </button>
         </div>
-      )}
+
+        {hwStatus?.active && (
+          <div className="hw-banner" role="status" aria-live="polite">
+            <span className="hw-banner-dot" aria-hidden="true" />
+            <p className="hw-banner-line">
+              <span className="hw-banner-tag">دست‌خط فعال</span>
+              <span className="hw-banner-sep" aria-hidden="true">
+                ·
+              </span>
+              <span className="hw-banner-text">
+                {hwStatus.message || "استخراج‌های بعدی با نمونهٔ ثبت‌شده دقیق‌تر می‌شوند."}
+              </span>
+              {(hwStatus.sample_filename || hwStatus.excel_filename) && (
+                <>
+                  <span className="hw-banner-sep" aria-hidden="true">
+                    ·
+                  </span>
+                  <span className="hw-banner-files" dir="ltr">
+                    {[hwStatus.sample_filename, hwStatus.excel_filename].filter(Boolean).join(" · ")}
+                  </span>
+                </>
+              )}
+            </p>
+            <button type="button" className="hw-banner-action" onClick={() => openHwModal()}>
+              مدیریت نمونه
+            </button>
+          </div>
+        )}
+      </div>
 
       <main className="sheet">
         <div className="title-row">

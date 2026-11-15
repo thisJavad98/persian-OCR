@@ -5,15 +5,33 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/javad-moghofei/persian-ocr/back/internal/ocr"
 	"github.com/xuri/excelize/v2"
 )
 
-func BuildExcel(filename, fullText string, lines []map[string]any, words []map[string]any, sentences []string, confidence *float64, engine string) ([]byte, error) {
+func BuildExcel(filename, fullText string, lines []map[string]any, words []map[string]any, sentences []string, table *ocr.TableData, confidence *float64, engine string) ([]byte, error) {
 	f := excelize.NewFile()
 	defer func() { _ = f.Close() }()
 
+	firstSheet := "متن"
+	sheetIndex := 0
+	if table != nil && len(table.Rows) > 0 {
+		tableSheet := "جدول"
+		_ = f.SetSheetName("Sheet1", tableSheet)
+		_ = f.SetSheetView(tableSheet, 0, &excelize.ViewOptions{RightToLeft: boolPtr(true)})
+		writeTableSheet(f, tableSheet, table)
+		firstSheet = tableSheet
+		sheetIndex = 1
+	} else {
+		_ = f.SetSheetName("Sheet1", firstSheet)
+	}
+
 	textSheet := "متن"
-	_ = f.SetSheetName("Sheet1", textSheet)
+	if sheetIndex == 0 {
+		_ = f.SetSheetName("Sheet1", textSheet)
+	} else {
+		_, _ = f.NewSheet(textSheet)
+	}
 	_ = f.SetSheetView(textSheet, 0, &excelize.ViewOptions{RightToLeft: boolPtr(true)})
 	_ = f.SetCellValue(textSheet, "A1", "فایل")
 	_ = f.SetCellValue(textSheet, "B1", filename)
@@ -83,11 +101,45 @@ func BuildExcel(filename, fullText string, lines []map[string]any, words []map[s
 	}
 	_ = f.SetColWidth(wordSheet, "B", "B", 40)
 
+	if idx, err := f.GetSheetIndex(firstSheet); err == nil && idx >= 0 {
+		f.SetActiveSheet(idx)
+	}
+
 	buf, err := f.WriteToBuffer()
 	if err != nil {
 		return nil, err
 	}
 	return bytes.Clone(buf.Bytes()), nil
+}
+
+func writeTableSheet(f *excelize.File, sheet string, table *ocr.TableData) {
+	row := 1
+	if len(table.Headers) > 0 {
+		hdr := make([]interface{}, len(table.Headers))
+		for i, h := range table.Headers {
+			hdr[i] = h
+		}
+		_ = f.SetSheetRow(sheet, fmt.Sprintf("A%d", row), &hdr)
+		row++
+	}
+	for _, dataRow := range table.Rows {
+		cells := make([]interface{}, len(dataRow))
+		for i, c := range dataRow {
+			cells[i] = c
+		}
+		_ = f.SetSheetRow(sheet, fmt.Sprintf("A%d", row), &cells)
+		row++
+	}
+	cols := 1
+	if len(table.Headers) > 0 {
+		cols = len(table.Headers)
+	} else if len(table.Rows) > 0 {
+		cols = len(table.Rows[0])
+	}
+	if cols > 0 {
+		endCol, _ := excelize.ColumnNumberToName(cols)
+		_ = f.SetColWidth(sheet, "A", endCol, 22)
+	}
 }
 
 func boolPtr(b bool) *bool { return &b }

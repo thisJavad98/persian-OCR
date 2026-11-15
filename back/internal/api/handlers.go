@@ -16,7 +16,9 @@ import (
 	"github.com/javad-moghofei/persian-ocr/back/internal/config"
 	"github.com/javad-moghofei/persian-ocr/back/internal/cursor"
 	"github.com/javad-moghofei/persian-ocr/back/internal/export"
+	"github.com/javad-moghofei/persian-ocr/back/internal/handwriting"
 	"github.com/javad-moghofei/persian-ocr/back/internal/imageutil"
+	"github.com/javad-moghofei/persian-ocr/back/internal/ocr"
 )
 
 var allowedTypes = map[string]bool{
@@ -29,6 +31,7 @@ type Server struct {
 	cursor  *cursor.Service
 	root    string
 	session *auth.Session
+	hw      *handwriting.Store
 }
 
 func NewServer(cfg *config.Config, root string) *Server {
@@ -41,6 +44,7 @@ func NewServer(cfg *config.Config, root string) *Server {
 		cursor:  cursor.NewService(cfg, root),
 		root:    root,
 		session: sess,
+		hw:      handwriting.NewStore(),
 	}
 }
 
@@ -58,6 +62,9 @@ func (s *Server) Routes() chi.Router {
 			r.Post("/export/word", s.exportWord)
 		})
 		r.Get("/api/health", s.health)
+		r.Get("/api/handwriting/status", s.handwritingStatus)
+		r.Post("/api/handwriting/train", s.handwritingTrain)
+		r.Delete("/api/handwriting", s.handwritingClear)
 	})
 	return r
 }
@@ -140,7 +147,11 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 	ocrCtx, cancel := context.WithTimeout(context.Background(), time.Duration((s.cfg.CursorOCRTimeout*float64(1+s.cfg.CursorOCRRetries)+30)*float64(time.Second)))
 	defer cancel()
 
-	result, err := s.cursor.Extract(ocrCtx, tmpPath)
+	var hwProfile *handwriting.Profile
+	if user, uerr := s.session.UsernameFromRequest(r); uerr == nil {
+		hwProfile = s.hw.Get(user)
+	}
+	result, err := s.cursor.Extract(ocrCtx, tmpPath, hwProfile)
 	if err != nil {
 		writeJSON(w, http.StatusOK, failedOut(filename, contentType, err.Error()))
 		return
@@ -152,6 +163,10 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := buildSuccessOut(filename, contentType, result, conf)
+	if hwProfile != nil && hwProfile.Active {
+		msg := "شما نمونه استخراجی ثبت کرده‌اید؛ با توجه به آن استخراج دقیق‌تری انجام شد."
+		out.Warning = &msg
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -162,7 +177,7 @@ func (s *Server) exportExcel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	lines, words := exportMaps(in.Lines, in.Words)
-	payload, err := export.BuildExcel(in.Filename, in.ExtractedText, lines, words, in.Sentences, in.Confidence, in.Engine)
+	payload, err := export.BuildExcel(in.Filename, in.ExtractedText, lines, words, in.Sentences, in.Table, in.Confidence, in.Engine)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, ErrorDetail{Detail: err.Error()})
 		return
@@ -224,6 +239,11 @@ func buildSuccessOut(filename, mime string, result *cursor.Result, conf float64)
 		out.Words = append(out.Words, OcrWord{
 			Text: word, Confidence: conf, Row: 0, LineIndex: i,
 		})
+	}
+	if result.Table != nil {
+		if tbl := ocr.NormalizeTable(result.IsTable, result.Table.Headers, result.Table.Rows); tbl != nil {
+			out.Table = tbl
+		}
 	}
 	return out
 }

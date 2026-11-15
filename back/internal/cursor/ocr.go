@@ -14,24 +14,40 @@ import (
 	"time"
 
 	"github.com/javad-moghofei/persian-ocr/back/internal/config"
+	"github.com/javad-moghofei/persian-ocr/back/internal/handwriting"
+	"github.com/javad-moghofei/persian-ocr/back/internal/ocr"
 )
 
 const ocrPrompt = `OCR this image file (relative to workspace): %s
 
 Transcribe ALL visible text exactly (Persian/Arabic logical order, keep digits and Latin).
 
+If the image is a TABLE (spreadsheet, form grid, printed table):
+- set "is_table": true
+- fill "table":{"headers":[...],"rows":[["cell",...],...]} with every row/column in reading order (top-to-bottom, right-to-left for Persian tables)
+- also set "text" as a plain fallback transcript
+
+If NOT a table: "is_table": false and "table": null
+
 Return ONLY JSON:
-{"text":"","lines":[],"words":[],"sentences":[],"confidence":0.0}
+{"is_table":false,"text":"","lines":[],"words":[],"sentences":[],"confidence":0.0,"table":null}
 `
 
 type Result struct {
-	Text       string   `json:"text"`
-	Lines      []string `json:"lines"`
-	Words      []string `json:"words"`
-	Sentences  []string `json:"sentences"`
-	Confidence float64  `json:"confidence"`
-	Engine     string   `json:"engine"`
-	Raw        string   `json:"raw,omitempty"`
+	Text       string        `json:"text"`
+	Lines      []string      `json:"lines"`
+	Words      []string      `json:"words"`
+	Sentences  []string      `json:"sentences"`
+	Confidence float64       `json:"confidence"`
+	Engine     string        `json:"engine"`
+	Raw        string        `json:"raw,omitempty"`
+	IsTable    bool          `json:"is_table"`
+	Table      *parsedTable  `json:"table,omitempty"`
+}
+
+type parsedTable struct {
+	Headers []string   `json:"headers"`
+	Rows    [][]string `json:"rows"`
 }
 
 type Status struct {
@@ -118,11 +134,65 @@ func (s *Service) InvalidateAuthCache() {
 	s.mu.Unlock()
 }
 
-func (s *Service) Extract(parent context.Context, imagePath string) (*Result, error) {
-	return s.extractWithRetry(parent, imagePath, s.cfg.CursorOCRRetries)
+func (s *Service) Extract(parent context.Context, imagePath string, profile *handwriting.Profile) (*Result, error) {
+	return s.extractWithRetry(parent, imagePath, s.cfg.CursorOCRRetries, profile)
 }
 
-func (s *Service) extractWithRetry(parent context.Context, imagePath string, retries int) (*Result, error) {
+// StudyHandwriting runs a short calibration pass on the user's sample + Excel reference.
+func (s *Service) StudyHandwriting(ctx context.Context, imagePath, referenceGrid string) (string, error) {
+	binary := s.agentBinary()
+	if binary == "" {
+		return "", fmt.Errorf("cursor-agent CLI not found on PATH")
+	}
+	root, err := filepath.Abs(s.workspace)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(root, imagePath)
+	if err != nil {
+		rel = imagePath
+	}
+	rel = filepath.ToSlash(rel)
+	prompt := buildStudyPrompt(rel, referenceGrid)
+	cmd := s.buildCommand(ctx, binary, root, prompt)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	cmd.Dir = root
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return "", friendlyError(ctx.Err())
+		}
+		out := strings.TrimSpace(stdout.String())
+		if out == "" {
+			return "", fmt.Errorf("calibration failed: %s", trim(stderr.String(), 400))
+		}
+	}
+	out := strings.TrimSpace(stdout.String())
+	if notes := parseStudyNotes(out); notes != "" {
+		return trim(notes, 2000), nil
+	}
+	return "handwriting profile active", nil
+}
+
+func parseStudyNotes(text string) string {
+	cleaned := stripNoise(text)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(cleaned), &raw); err != nil {
+		return ""
+	}
+	var notes string
+	_ = json.Unmarshal(raw["style_notes"], &notes)
+	notes = strings.TrimSpace(notes)
+	if notes != "" {
+		return notes
+	}
+	var fallback string
+	_ = json.Unmarshal(raw["text"], &fallback)
+	return strings.TrimSpace(fallback)
+}
+
+func (s *Service) extractWithRetry(parent context.Context, imagePath string, retries int, profile *handwriting.Profile) (*Result, error) {
 	var last error
 	attempts := retries + 1
 	if attempts < 1 {
@@ -139,7 +209,7 @@ func (s *Service) extractWithRetry(parent context.Context, imagePath string, ret
 			}
 		}
 		attemptCtx, cancel := context.WithTimeout(parent, perAttempt)
-		res, err := s.extractOnce(attemptCtx, imagePath)
+		res, err := s.extractOnce(attemptCtx, imagePath, profile)
 		cancel()
 		if err == nil {
 			return res, nil
@@ -153,7 +223,7 @@ func (s *Service) extractWithRetry(parent context.Context, imagePath string, ret
 	return nil, friendlyError(last)
 }
 
-func (s *Service) extractOnce(ctx context.Context, imagePath string) (*Result, error) {
+func (s *Service) extractOnce(ctx context.Context, imagePath string, profile *handwriting.Profile) (*Result, error) {
 	binary := s.agentBinary()
 	if binary == "" {
 		return nil, fmt.Errorf("cursor-agent CLI not found on PATH")
@@ -170,7 +240,7 @@ func (s *Service) extractOnce(ctx context.Context, imagePath string) (*Result, e
 	}
 	rel = filepath.ToSlash(rel)
 
-	prompt := fmt.Sprintf(ocrPrompt, rel)
+	prompt := buildOCRPrompt(rel, profile)
 	cmd := s.buildCommand(ctx, binary, root, prompt)
 
 	var stdout, stderr bytes.Buffer
@@ -325,7 +395,22 @@ func decodeResult(s string) *Result {
 	_ = json.Unmarshal(raw["words"], &res.Words)
 	_ = json.Unmarshal(raw["sentences"], &res.Sentences)
 	_ = json.Unmarshal(raw["confidence"], &res.Confidence)
-	if res.Text == "" && len(res.Lines) == 0 {
+	var isTable bool
+	_ = json.Unmarshal(raw["is_table"], &isTable)
+	res.IsTable = isTable
+	if tbl, ok := raw["table"]; ok && tbl != nil {
+		res.Table = parseTableJSON(tbl)
+	}
+	if res.Table != nil {
+		norm := ocr.NormalizeTable(res.IsTable || true, res.Table.Headers, res.Table.Rows)
+		if norm != nil {
+			res.IsTable = true
+			res.Table = &parsedTable{Headers: norm.Headers, Rows: norm.Rows}
+		} else {
+			res.Table = nil
+		}
+	}
+	if res.Text == "" && len(res.Lines) == 0 && res.Table == nil {
 		return nil
 	}
 	if res.Words == nil {
@@ -358,6 +443,21 @@ func nonEmptyLines(text string) []string {
 		}
 	}
 	return lines
+}
+
+func parseTableJSON(raw json.RawMessage) *parsedTable {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var obj parsedTable
+	if err := json.Unmarshal(raw, &obj); err == nil && len(obj.Rows) > 0 {
+		return &obj
+	}
+	var rows [][]string
+	if err := json.Unmarshal(raw, &rows); err == nil && len(rows) > 0 {
+		return &parsedTable{Rows: rows}
+	}
+	return nil
 }
 
 func trim(s string, n int) string {

@@ -34,6 +34,9 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) {
+	if user, err := s.session.UsernameFromRequest(r); err == nil {
+		s.hw.Clear(user)
+	}
 	s.session.ClearCookie(w)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

@@ -1,5 +1,17 @@
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
-import { downloadExcel, downloadWord, fetchHealth, uploadImage, type HealthStatus, type OcrJob } from "./api";
+import {
+  clearHandwriting,
+  downloadExcel,
+  downloadWord,
+  fetchHandwritingStatus,
+  fetchHealth,
+  trainHandwriting,
+  uploadImage,
+  type HandwritingStatus,
+  type HealthStatus,
+  type OcrJob,
+} from "./api";
+import { parseTable, tableColCount, type OcrTable } from "./table";
 import "./App.css";
 
 type UiState = "idle" | "uploading" | "ready" | "error";
@@ -23,6 +35,15 @@ function App({ onLogout }: AppProps) {
   const [exporting, setExporting] = useState<"excel" | "word" | null>(null);
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
+  const [hwStatus, setHwStatus] = useState<HandwritingStatus | null>(null);
+  const [hwModalOpen, setHwModalOpen] = useState(false);
+  const [hwTraining, setHwTraining] = useState(false);
+  const [hwError, setHwError] = useState<string | null>(null);
+  const [hwSample, setHwSample] = useState<File | null>(null);
+  const [hwExcel, setHwExcel] = useState<File | null>(null);
+  const [hwSamplePreview, setHwSamplePreview] = useState<string | null>(null);
+  const hwSampleRef = useRef<HTMLInputElement>(null);
+  const hwExcelRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let alive = true;
@@ -45,6 +66,92 @@ function App({ onLogout }: AppProps) {
       window.clearInterval(id);
     };
   }, []);
+
+  useEffect(() => {
+    let alive = true;
+    void fetchHandwritingStatus()
+      .then((data) => {
+        if (alive) setHwStatus(data);
+      })
+      .catch(() => {
+        if (alive) setHwStatus(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!hwSample) {
+      setHwSamplePreview(null);
+      return;
+    }
+    const url = URL.createObjectURL(hwSample);
+    setHwSamplePreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [hwSample]);
+
+  useEffect(() => {
+    if (!hwModalOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !hwTraining) setHwModalOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [hwModalOpen, hwTraining]);
+
+  function openHwModal() {
+    setHwError(null);
+    setHwSample(null);
+    setHwExcel(null);
+    if (hwSampleRef.current) hwSampleRef.current.value = "";
+    if (hwExcelRef.current) hwExcelRef.current.value = "";
+    setHwModalOpen(true);
+  }
+
+  async function submitHwTraining() {
+    if (!hwSample || !hwExcel) {
+      setHwError("هم تصویر نمونه و هم اکسل مرجع را انتخاب کنید.");
+      return;
+    }
+    setHwTraining(true);
+    setHwError(null);
+    try {
+      const result = await trainHandwriting(hwSample, hwExcel);
+      if (!result.ok) {
+        setHwError(result.error || "شناسایی دست‌خط ناموفق بود.");
+        return;
+      }
+      if (result.status) setHwStatus(result.status);
+      else {
+        const fresh = await fetchHandwritingStatus();
+        setHwStatus(fresh);
+      }
+      setHwModalOpen(false);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "خطای ناشناخته";
+      setHwError(
+        msg.includes("aborted") ? "زمان شناسایی تمام شد؛ دوباره تلاش کنید." : msg,
+      );
+    } finally {
+      setHwTraining(false);
+    }
+  }
+
+  async function onClearHw() {
+    setHwError(null);
+    try {
+      await clearHandwriting();
+      setHwStatus({ active: false });
+    } catch (err) {
+      setHwError(err instanceof Error ? err.message : "حذف نمونه ناموفق بود.");
+    }
+  }
 
   async function processFile(file: File) {
     if (!file.type.startsWith("image/")) {
@@ -103,6 +210,7 @@ function App({ onLogout }: AppProps) {
     Boolean((word.text || "").trim()),
   );
   const sentences = (job?.sentences || []).filter((s) => Boolean(s.trim()));
+  const table: OcrTable | null = job ? parseTable(job.table) : null;
 
   return (
     <div className="frame" data-ui="app">
@@ -166,7 +274,7 @@ function App({ onLogout }: AppProps) {
                 .finally(() => setExporting(null));
             }}
           >
-            {exporting === "excel" ? "…" : "دانلود اکسل"}
+            {exporting === "excel" ? "…" : table ? "دانلود اکسل جدول" : "دانلود اکسل"}
           </button>
         </div>
       </header>
@@ -191,23 +299,56 @@ function App({ onLogout }: AppProps) {
         </button>
       </div>
 
+      {hwStatus?.active && (
+        <div className="hw-banner" role="status" aria-live="polite">
+          <span className="hw-banner-dot" aria-hidden="true" />
+          <p className="hw-banner-line">
+            <span className="hw-banner-tag">دست‌خط فعال</span>
+            <span className="hw-banner-sep" aria-hidden="true">
+              ·
+            </span>
+            <span className="hw-banner-text">
+              {hwStatus.message || "استخراج‌های بعدی با نمونهٔ ثبت‌شده دقیق‌تر می‌شوند."}
+            </span>
+            {(hwStatus.sample_filename || hwStatus.excel_filename) && (
+              <>
+                <span className="hw-banner-sep" aria-hidden="true">
+                  ·
+                </span>
+                <span className="hw-banner-files" dir="ltr">
+                  {[hwStatus.sample_filename, hwStatus.excel_filename].filter(Boolean).join(" · ")}
+                </span>
+              </>
+            )}
+          </p>
+          <button type="button" className="hw-banner-action" onClick={() => openHwModal()}>
+            مدیریت نمونه
+          </button>
+        </div>
+      )}
+
       <main className="sheet">
         <div className="title-row">
-          <div>
+          <div className="title-main">
             <h1>خوانش دقیق با هوش مصنوعی</h1>
             <p className="lede">
               تصویر را بفرستید؛ مدل‌های AI کلمات و جملات را عیناً از تصویر
               استخراج می‌کنند.
             </p>
           </div>
-          {job?.confidence != null && (
-            <div className="confidence" aria-label="میانگین اطمینان">
-              <span className="confidence-label">اطمینان</span>
-              <span className="confidence-value num">
-                {confidenceLabel(job.confidence)}
-              </span>
-            </div>
-          )}
+          <div className="title-row-side">
+            <button type="button" className="btn primary btn-hw-title" onClick={() => openHwModal()}>
+              آموزش دست‌خط
+            </button>
+            {job?.confidence != null && (
+              <div className="confidence" aria-label="میانگین اطمینان">
+                <span className="confidence-label">اطمینان</span>
+                <span className="confidence-value num">
+                  {confidenceLabel(job.confidence)}
+                </span>
+              </div>
+            )}
+          </div>
         </div>
 
         <input
@@ -290,8 +431,43 @@ function App({ onLogout }: AppProps) {
               {uiState === "ready" && job && (
                 <>
                   {job.warning && (
-                    <div className="state-block error" role="status">
+                    <div className="state-block warn" role="status">
                       <p>{job.warning}</p>
+                    </div>
+                  )}
+
+                  {table && (
+                    <div className="similar-box" data-ui="table-view">
+                      <div className="lines-head">
+                        <span>جدول استخراج‌شده</span>
+                        <span className="num">
+                          {table.rows.length}×{tableColCount(table)}
+                        </span>
+                      </div>
+                      <div className="table-scroll">
+                        <table className="ocr-data-table" dir="rtl" lang="fa">
+                          {table.headers && table.headers.length > 0 && (
+                            <thead>
+                              <tr>
+                                {table.headers.map((h, i) => (
+                                  <th key={`h-${i}`} scope="col">
+                                    {h}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+                          )}
+                          <tbody>
+                            {table.rows.map((row, ri) => (
+                              <tr key={`r-${ri}`}>
+                                {row.map((cell, ci) => (
+                                  <td key={`c-${ri}-${ci}`}>{cell}</td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
                   )}
 
@@ -358,6 +534,206 @@ function App({ onLogout }: AppProps) {
           </div>
         )}
       </main>
+
+      {hwModalOpen && (
+        <div
+          className="hw-backdrop"
+          data-ui="hw-modal"
+          role="presentation"
+          onClick={() => !hwTraining && setHwModalOpen(false)}
+        >
+          <div
+            className="hw-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="hw-modal-title"
+            aria-describedby="hw-modal-desc"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="hw-modal-mark" aria-hidden="true">
+              <span className="hw-modal-glyph">خ</span>
+            </div>
+
+            <header className="hw-modal-head">
+              <p className="hw-modal-kicker">کالیبراسیون</p>
+              <h2 id="hw-modal-title">آموزش دست‌خط</h2>
+              <p id="hw-modal-desc" className="hw-modal-lede">
+                یک صفحهٔ واقعی از دست‌خط خودتان و اکسلِ استخراج درست همان صفحه را بدهید؛
+                خط‌خوان شکل حروف و چیدمان جدول را برای آپلودهای بعدی حفظ می‌کند.
+              </p>
+              <button
+                type="button"
+                className="hw-modal-close"
+                disabled={hwTraining}
+                aria-label="بستن"
+                onClick={() => setHwModalOpen(false)}
+              >
+                ×
+              </button>
+            </header>
+
+            <ol className="hw-steps" aria-label="مراحل">
+              <li
+                className={
+                  hwSample ? "is-done" : hwTraining ? "" : "is-current"
+                }
+              >
+                <span className="hw-step-num num">۱</span>
+                <span className="hw-step-label">تصویر نمونه</span>
+              </li>
+              <li
+                className={
+                  hwSample && hwExcel
+                    ? "is-done"
+                    : hwSample && !hwTraining
+                      ? "is-current"
+                      : ""
+                }
+              >
+                <span className="hw-step-num num">۲</span>
+                <span className="hw-step-label">اکسل مرجع</span>
+              </li>
+              <li
+                className={
+                  hwSample && hwExcel && !hwTraining ? "is-current" : hwTraining ? "is-current" : ""
+                }
+              >
+                <span className="hw-step-num num">۳</span>
+                <span className="hw-step-label">شناسایی سبک</span>
+              </li>
+            </ol>
+
+            <div className="hw-modal-body">
+              {hwStatus?.active && (
+                <div className="hw-profile">
+                  <div className="hw-profile-copy">
+                    <span className="hw-profile-tag">نمونهٔ فعال</span>
+                    <p className="hw-profile-names" dir="ltr">
+                      <span className="mono">{hwStatus.sample_filename || "—"}</span>
+                      <span className="hw-profile-sep" aria-hidden="true">
+                        /
+                      </span>
+                      <span className="mono">{hwStatus.excel_filename || "—"}</span>
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn ghost compact hw-profile-clear"
+                    disabled={hwTraining}
+                    onClick={() => void onClearHw()}
+                  >
+                    حذف نمونه
+                  </button>
+                </div>
+              )}
+
+              <div className="hw-picks">
+                <div className="hw-pick">
+                  <span className="hw-pick-label">تصویر نمونه دست‌خط</span>
+                  <button
+                    type="button"
+                    className={`hw-pick-panel${hwSample ? " has-file" : ""}`}
+                    disabled={hwTraining}
+                    onClick={() => hwSampleRef.current?.click()}
+                  >
+                    {hwSamplePreview ? (
+                      <img
+                        className="hw-pick-thumb"
+                        src={hwSamplePreview}
+                        alt=""
+                      />
+                    ) : (
+                      <span className="hw-pick-empty">
+                        <span className="hw-pick-empty-title">انتخاب یا رها کردن تصویر</span>
+                        <span className="hw-pick-empty-hint">PNG، JPG یا اسکن فرم</span>
+                      </span>
+                    )}
+                    <span className="hw-pick-filename" dir="ltr">
+                      {hwSample?.name || "هنوز فایلی نیست"}
+                    </span>
+                  </button>
+                  <input
+                    ref={hwSampleRef}
+                    className="sr-only"
+                    type="file"
+                    accept="image/*"
+                    disabled={hwTraining}
+                    tabIndex={-1}
+                    onChange={(event) => setHwSample(event.target.files?.[0] ?? null)}
+                  />
+                </div>
+
+                <div className="hw-pick">
+                  <span className="hw-pick-label">اکسل مرجع (.xlsx)</span>
+                  <button
+                    type="button"
+                    className={`hw-pick-panel hw-pick-panel--sheet${hwExcel ? " has-file" : ""}`}
+                    disabled={hwTraining}
+                    onClick={() => hwExcelRef.current?.click()}
+                  >
+                    <span className="hw-sheet-glyph num" aria-hidden="true">
+                      xlsx
+                    </span>
+                    <span className="hw-pick-empty">
+                      <span className="hw-pick-empty-title">فایل استخراج درست</span>
+                      <span className="hw-pick-empty-hint">همان داده‌ای که از نمونه انتظار دارید</span>
+                    </span>
+                    <span className="hw-pick-filename" dir="ltr">
+                      {hwExcel?.name || "هنوز فایلی نیست"}
+                    </span>
+                  </button>
+                  <input
+                    ref={hwExcelRef}
+                    className="sr-only"
+                    type="file"
+                    accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    disabled={hwTraining}
+                    tabIndex={-1}
+                    onChange={(event) => setHwExcel(event.target.files?.[0] ?? null)}
+                  />
+                </div>
+              </div>
+
+              {hwError && (
+                <p className="hw-inline-error" role="alert">
+                  {hwError}
+                </p>
+              )}
+
+              {hwTraining && (
+                <div className="hw-training" aria-live="polite">
+                  <span className="pulse" aria-hidden="true" />
+                  <div>
+                    <p className="hw-training-title">در حال شناسایی دست‌خط</p>
+                    <p className="hw-training-hint">
+                      تصویر با اکسل مرجع هم‌تراز می‌شود؛ ممکن است چند دقیقه طول بکشد.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <footer className="hw-modal-foot">
+              <button
+                type="button"
+                className="btn ghost"
+                disabled={hwTraining}
+                onClick={() => setHwModalOpen(false)}
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                className="btn primary"
+                disabled={hwTraining || !hwSample || !hwExcel}
+                onClick={() => void submitHwTraining()}
+              >
+                {hwTraining ? "در حال شناسایی…" : "شناسایی و ذخیره"}
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

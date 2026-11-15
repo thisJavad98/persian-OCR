@@ -1,5 +1,7 @@
 package api
 
+import "github.com/javad-moghofei/persian-ocr/back/internal/ocr"
+
 type OcrLine struct {
 	Text       string      `json:"text"`
 	Confidence float64     `json:"confidence"`
@@ -32,13 +34,14 @@ type OcrJobOut struct {
 }
 
 type ExportIn struct {
-	Filename      string    `json:"filename"`
-	ExtractedText string    `json:"extracted_text"`
-	Lines         []OcrLine `json:"lines"`
-	Words         []OcrWord `json:"words"`
-	Sentences     []string  `json:"sentences"`
-	Engine        string    `json:"engine"`
-	Confidence    *float64  `json:"confidence"`
+	Filename      string         `json:"filename"`
+	ExtractedText string         `json:"extracted_text"`
+	Lines         []OcrLine      `json:"lines"`
+	Words         []OcrWord      `json:"words"`
+	Sentences     []string       `json:"sentences"`
+	Table         *ocr.TableData `json:"table"`
+	Engine        string         `json:"engine"`
+	Confidence    *float64       `json:"confidence"`
 }
 
 type HealthOut struct {

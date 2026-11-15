@@ -56,7 +56,7 @@ export default function Login({ onSuccess }: Props) {
           <div className="login-stage login-enter">
             <header className="login-intro">
               <h1 className="login-title">
-                <span className="login-title-accent">خ</span>ط‌خوان
+                <span className="login-title-accent">خ</span>ط ‌خوان
               </h1>
               <p className="login-lede">
                 ورود فقط برای کاربر مجاز. پس از آن تصویر را بفرستید و متن را همان‌طور که روی صفحه

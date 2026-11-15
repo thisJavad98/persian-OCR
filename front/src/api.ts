@@ -1,3 +1,5 @@
+import type { OcrTable } from './table'
+
 export type OcrLine = {
   text: string
   confidence: number
@@ -63,7 +65,7 @@ export type OcrJob = {
   lines: OcrLine[]
   words?: OcrWord[]
   sentences?: string[]
-  table: unknown
+  table: OcrTable | null
   death_records: unknown
   engine: string | null
   confidence: number | null
@@ -103,6 +105,7 @@ function exportBody(job: OcrJob): object {
     lines: job.lines || [],
     words: job.words || [],
     sentences: job.sentences || [],
+    table: job.table,
     engine: job.engine || '',
     confidence: job.confidence,
   }
@@ -135,4 +138,56 @@ export function downloadExcel(job: OcrJob): Promise<void> {
 
 export function downloadWord(job: OcrJob): Promise<void> {
   return downloadExport('/api/ocr/export/word', job, 'docx')
+}
+
+export type HandwritingStatus = {
+  active: boolean
+  sample_filename?: string
+  excel_filename?: string
+  message?: string
+}
+
+export async function fetchHandwritingStatus(): Promise<HandwritingStatus> {
+  const response = await fetch('/api/handwriting/status', apiInit)
+  if (!response.ok) {
+    throw new Error('وضعیت آموزش دست‌خط در دسترس نیست.')
+  }
+  return response.json()
+}
+
+const HW_TRAIN_TIMEOUT_MS = 12 * 60 * 1000
+
+export async function trainHandwriting(
+  sampleImage: File,
+  referenceExcel: File,
+): Promise<{ ok: boolean; error?: string; status?: HandwritingStatus }> {
+  const body = new FormData()
+  body.append('sample_image', sampleImage)
+  body.append('reference_excel', referenceExcel)
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), HW_TRAIN_TIMEOUT_MS)
+  let response: Response
+  try {
+    response = await fetch('/api/handwriting/train', {
+      ...apiInit,
+      method: 'POST',
+      body,
+      signal: controller.signal,
+    })
+  } finally {
+    window.clearTimeout(timer)
+  }
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new Error(data?.detail || 'آموزش دست‌خط ناموفق بود.')
+  }
+  return data as { ok: boolean; error?: string; status?: HandwritingStatus }
+}
+
+export async function clearHandwriting(): Promise<void> {
+  const response = await fetch('/api/handwriting', { ...apiInit, method: 'DELETE' })
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null)
+    throw new Error(detail?.detail || 'حذف نمونه ناموفق بود.')
+  }
 }

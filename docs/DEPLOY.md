@@ -1,5 +1,16 @@
 # Deploy: Vercel (front) + Neon (DB) + API (Render or Vercel Go)
 
+## وضعیت فعلی
+
+| بخش | آدرس / وضعیت |
+|-----|----------------|
+| Frontend | https://front-sigma-dun.vercel.app (Vercel · پروژه `front`) |
+| API | پروژه Vercel `persian-ocr-api` — Root Directory = `back` — بعد از push روی `main` دیپلوی یا `vercel deploy` |
+| Secrets | `scripts/sync-vercel-api-env.sh` از `back/.env` (بدون `localhost` در DATABASE_URL) |
+| Neon | `DATABASE_URL` را در Vercel → persian-ocr-api → Environment Variables بگذارید |
+
+# Deploy: Vercel (front) + Neon (DB) + API (Render or Vercel Go)
+
 ## Neon (Postgres)
 
 1. [console.neon.tech](https://console.neon.tech) → New project `persian-ocr`

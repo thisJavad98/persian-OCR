@@ -1,1 +1,16 @@
-/* Base reset lives in App.css for this single-screen app. */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.gate-loading {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  background: #171719;
+  color: #f5f5f6;
+  font-family: 'Vazirmatn', 'Onest', system-ui, sans-serif;
+}

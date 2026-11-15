@@ -1,63 +1,43 @@
 # Persian OCR — خط‌خوان
 
-AI-only extraction of exact text (words + sentences) from any image: print, handwriting, Nasta'liq, tables, forms.
+Stateless AI text extraction from images (print, handwriting, Nasta'liq, forms). **Nothing is stored** — no database, no saved uploads.
 
 ## Stack
 
 | Layer | Tech |
 | --- | --- |
 | Frontend | React + Vite + TypeScript (`front/`) |
-| Backend | FastAPI (`back/`) |
-| OCR | **AI vision only** — OpenAI GPT-4o / Claude / Gemini (+ Ollama fallback) |
-| Database | PostgreSQL (job history) |
-| Export | Excel (`.xlsx`) and Word (`.docx`) |
+| Backend | Go (`back/`) |
+| OCR | **Cursor Agent** (`composer-2.5` by default) |
 
-## How OCR works
+## How it works
 
-1. **Extract** — strong vision model transcribes the full page  
-2. **Verify** — second AI pass proofreads the draft against the same image (`OCR_AI_VERIFY=1`)  
-3. **Cross-check** — if a second cloud key exists, another model re-reads and merges (`OCR_AI_CROSS_CHECK=1`)
+1. User selects an image (preview stays in the browser only).
+2. Server runs Cursor on a **temporary** JPEG under `back/.scratch/` (deleted right after OCR).
+3. JSON result is shown in the UI.
+4. **Download** (Excel/Word) only if the user clicks — built in memory from the result; nothing persisted.
 
-No classic OCR engines, no row-slice UI, no death-list-only mode.
+Requires `cursor-agent` logged in (`cursor-agent login`) or `CURSOR_API_KEY`.
 
 ## Prerequisites
 
-- Python 3.9+
+- Go 1.22+
 - Node.js 22+ (24 recommended)
-- PostgreSQL 16
-- At least one of:
-  - `OPENAI_API_KEY` (recommended: `gpt-4o`)
-  - `ANTHROPIC_API_KEY`
-  - `GEMINI_API_KEY`
-  - or local [Ollama](https://ollama.com) with a vision model (`qwen2.5vl:3b`)
-
-## Database
-
-```bash
-createdb persian_ocr
-```
-
-Copy `back/.env.example` to `back/.env` and set your AI key(s).
+- `cursor-agent` on `PATH`
 
 ## Backend
 
 ```bash
 cd back
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+go run ./cmd/server
 ```
-
-Useful env vars:
 
 | Variable | Purpose |
 | --- | --- |
-| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | Cloud vision providers |
-| `AI_PROVIDER` | `auto` / `openai` / `anthropic` / `gemini` / `ollama` |
-| `OCR_AI_VERIFY` | Second AI proofread pass (`1` default) |
-| `OCR_AI_CROSS_CHECK` | Extra provider merge when a 2nd key exists |
-| `VISION_OCR_MODEL` | Ollama fallback model |
+| `CURSOR_OCR_MODEL` | Model id (default `composer-2.5`) |
+| `CURSOR_OCR_TIMEOUT` | Agent timeout in seconds |
+| `CURSOR_API_KEY` | Optional API key |
+| `OCR_MAX_IMAGE_SIDE` | Max image longest side for OCR |
 
 ## Frontend
 
@@ -67,10 +47,10 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173 — Vite proxies `/api` to port 8000.
+http://localhost:5173 — Vite proxies `/api` to port 8000.
 
 ## API
 
-- `POST /api/ocr/upload` — image in, AI transcript out (`text`, `lines`, `words`, `sentences`)
-- `GET /api/ocr/{id}/excel` / `/word` — exports
-- `GET /api/health` — provider readiness
+- `POST /api/ocr/upload` — image in, OCR JSON out (not stored)
+- `POST /api/ocr/export/excel` / `export/word` — JSON body in, file bytes out
+- `GET /api/health`

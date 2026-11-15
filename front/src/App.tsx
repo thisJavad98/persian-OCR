@@ -1,70 +1,72 @@
-import {
-  useRef,
-  useState,
-  type ChangeEvent,
-  type DragEvent,
-} from 'react'
-import { excelUrl, uploadImage, wordUrl, type OcrJob } from './api'
-import './App.css'
+import { useRef, useState, type ChangeEvent, type DragEvent } from "react";
+import { downloadExcel, downloadWord, uploadImage, type OcrJob } from "./api";
+import "./App.css";
 
-type UiState = 'idle' | 'uploading' | 'ready' | 'error'
+type UiState = "idle" | "uploading" | "ready" | "error";
 
 function confidenceLabel(value: number | null | undefined): string {
-  if (value == null) return '—'
-  return `${Math.round(value * 100)}٪`
+  if (value == null) return "—";
+  return `${Math.round(value * 100)}٪`;
 }
 
-function App() {
-  const inputRef = useRef<HTMLInputElement>(null)
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
-  const [job, setJob] = useState<OcrJob | null>(null)
-  const [uiState, setUiState] = useState<UiState>('idle')
-  const [error, setError] = useState<string | null>(null)
-  const [dragOver, setDragOver] = useState(false)
+type AppProps = {
+  onLogout: () => void | Promise<void>
+}
+
+function App({ onLogout }: AppProps) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [job, setJob] = useState<OcrJob | null>(null);
+  const [uiState, setUiState] = useState<UiState>("idle");
+  const [error, setError] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [exporting, setExporting] = useState<"excel" | "word" | null>(null);
 
   async function processFile(file: File) {
-    if (!file.type.startsWith('image/')) {
-      setError('فقط فایل تصویری بفرستید.')
-      setUiState('error')
-      return
+    if (!file.type.startsWith("image/")) {
+      setError("فقط فایل تصویری بفرستید.");
+      setUiState("error");
+      return;
     }
 
-    if (previewUrl) URL.revokeObjectURL(previewUrl)
-    setPreviewUrl(URL.createObjectURL(file))
-    setJob(null)
-    setError(null)
-    setUiState('uploading')
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewUrl(URL.createObjectURL(file));
+    setJob(null);
+    setError(null);
+    setUiState("uploading");
 
     try {
-      const result = await uploadImage(file)
-      setJob(result)
-      if (result.status === 'failed') {
-        setError(result.error_message || 'استخراج متن ناموفق بود.')
-        setUiState('error')
-        return
+      const result = await uploadImage(file);
+      setJob(result);
+      if (result.status === "failed") {
+        setError(result.error_message || "استخراج متن ناموفق بود.");
+        setUiState("error");
+        return;
       }
-      setUiState('ready')
+      setUiState("ready");
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'خطای ناشناخته')
-      setUiState('error')
+      setError(err instanceof Error ? err.message : "خطای ناشناخته");
+      setUiState("error");
     }
   }
 
   function onFileChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0]
-    if (file) void processFile(file)
-    event.target.value = ''
+    const file = event.target.files?.[0];
+    if (file) void processFile(file);
+    event.target.value = "";
   }
 
   function onDrop(event: DragEvent<HTMLElement>) {
-    event.preventDefault()
-    setDragOver(false)
-    const file = event.dataTransfer.files?.[0]
-    if (file) void processFile(file)
+    event.preventDefault();
+    setDragOver(false);
+    const file = event.dataTransfer.files?.[0];
+    if (file) void processFile(file);
   }
 
-  const words = (job?.words || []).filter((word) => Boolean((word.text || '').trim()))
-  const sentences = (job?.sentences || []).filter((s) => Boolean(s.trim()))
+  const words = (job?.words || []).filter((word) =>
+    Boolean((word.text || "").trim()),
+  );
+  const sentences = (job?.sentences || []).filter((s) => Boolean(s.trim()));
 
   return (
     <div className="frame" data-ui="app">
@@ -79,34 +81,57 @@ function App() {
           </div>
         </div>
         <div className="top-actions">
+          <button type="button" className="btn ghost" onClick={() => void onLogout()}>
+            خروج
+          </button>
           <button
             type="button"
             className="btn ghost"
             onClick={() => inputRef.current?.click()}
-            disabled={uiState === 'uploading'}
+            disabled={uiState === "uploading"}
           >
             انتخاب تصویر
           </button>
-          <a
-            className={`btn ghost ${job?.status === 'completed' ? '' : 'is-disabled'}`}
-            href={job?.status === 'completed' ? wordUrl(job.id) : undefined}
-            aria-disabled={job?.status !== 'completed'}
-            onClick={(event) => {
-              if (job?.status !== 'completed') event.preventDefault()
+          <button
+            type="button"
+            className="btn ghost"
+            disabled={job?.status !== "completed" || exporting != null}
+            onClick={() => {
+              if (!job || job.status !== "completed") return;
+              setExporting("word");
+              void downloadWord(job)
+                .catch((err) =>
+                  setError(
+                    err instanceof Error
+                      ? err.message
+                      : "دانلود ورد ناموفق بود.",
+                  ),
+                )
+                .finally(() => setExporting(null));
             }}
           >
-            دانلود ورد
-          </a>
-          <a
-            className={`btn primary ${job?.status === 'completed' ? '' : 'is-disabled'}`}
-            href={job?.status === 'completed' ? excelUrl(job.id) : undefined}
-            aria-disabled={job?.status !== 'completed'}
-            onClick={(event) => {
-              if (job?.status !== 'completed') event.preventDefault()
+            {exporting === "word" ? "…" : "دانلود ورد"}
+          </button>
+          <button
+            type="button"
+            className="btn primary"
+            disabled={job?.status !== "completed" || exporting != null}
+            onClick={() => {
+              if (!job || job.status !== "completed") return;
+              setExporting("excel");
+              void downloadExcel(job)
+                .catch((err) =>
+                  setError(
+                    err instanceof Error
+                      ? err.message
+                      : "دانلود اکسل ناموفق بود.",
+                  ),
+                )
+                .finally(() => setExporting(null));
             }}
           >
-            دانلود اکسل
-          </a>
+            {exporting === "excel" ? "…" : "دانلود اکسل"}
+          </button>
         </div>
       </header>
 
@@ -115,13 +140,16 @@ function App() {
           <div>
             <h1>خوانش دقیق با هوش مصنوعی</h1>
             <p className="lede">
-              تصویر را بفرستید؛ مدل‌های قوی AI کلمات و جملات را عیناً از تصویر استخراج می‌کنند.
+              تصویر را بفرستید؛ مدل‌های AI کلمات و جملات را عیناً از تصویر
+              استخراج می‌کنند.
             </p>
           </div>
           {job?.confidence != null && (
             <div className="confidence" aria-label="میانگین اطمینان">
               <span className="confidence-label">اطمینان</span>
-              <span className="confidence-value num">{confidenceLabel(job.confidence)}</span>
+              <span className="confidence-value num">
+                {confidenceLabel(job.confidence)}
+              </span>
             </div>
           )}
         </div>
@@ -136,10 +164,10 @@ function App() {
 
         {!previewUrl ? (
           <section
-            className={`dropzone ${dragOver ? 'is-over' : ''}`}
+            className={`dropzone ${dragOver ? "is-over" : ""}`}
             onDragOver={(event) => {
-              event.preventDefault()
-              setDragOver(true)
+              event.preventDefault();
+              setDragOver(true);
             }}
             onDragLeave={() => setDragOver(false)}
             onDrop={onDrop}
@@ -147,14 +175,16 @@ function App() {
             role="button"
             tabIndex={0}
             onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault()
-                inputRef.current?.click()
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                inputRef.current?.click();
               }
             }}
           >
             <p className="drop-title">تصویر را اینجا رها کنید</p>
-            <p className="drop-hint">هر محتوایی — خروجی همان متن واقعی تصویر است</p>
+            <p className="drop-hint">
+              هر محتوایی — خروجی همان متن واقعی تصویر است
+            </p>
           </section>
         ) : (
           <div className="workspace">
@@ -165,7 +195,7 @@ function App() {
                   type="button"
                   className="btn ghost compact"
                   onClick={() => inputRef.current?.click()}
-                  disabled={uiState === 'uploading'}
+                  disabled={uiState === "uploading"}
                 >
                   تعویض تصویر
                 </button>
@@ -181,23 +211,27 @@ function App() {
                 {job?.engine && <span className="meta mono">{job.engine}</span>}
               </div>
 
-              {uiState === 'uploading' && (
+              {uiState === "uploading" && (
                 <div className="state-block" aria-live="polite">
                   <div className="pulse" />
                   <p>در حال استخراج دقیق کلمات و جملات با AI…</p>
                 </div>
               )}
 
-              {uiState === 'error' && (
+              {uiState === "error" && (
                 <div className="state-block error" role="alert">
                   <p>{error}</p>
-                  <button type="button" className="btn ghost" onClick={() => inputRef.current?.click()}>
+                  <button
+                    type="button"
+                    className="btn ghost"
+                    onClick={() => inputRef.current?.click()}
+                  >
                     تلاش دوباره
                   </button>
                 </div>
               )}
 
-              {uiState === 'ready' && job && (
+              {uiState === "ready" && job && (
                 <>
                   {job.warning && (
                     <div className="state-block error" role="status">
@@ -242,7 +276,9 @@ function App() {
                         {job.lines.map((line, index) => (
                           <li key={`${index}-${line.text}`}>
                             <span>{line.text}</span>
-                            <span className="num similar-pct">{confidenceLabel(line.confidence)}</span>
+                            <span className="num similar-pct">
+                              {confidenceLabel(line.confidence)}
+                            </span>
                           </li>
                         ))}
                       </ol>
@@ -256,7 +292,7 @@ function App() {
                         <span className="num">{words.length}</span>
                       </div>
                       <p className="valid-words" dir="rtl" lang="fa">
-                        {words.map((word) => word.text).join('، ')}
+                        {words.map((word) => word.text).join("، ")}
                       </p>
                     </div>
                   )}
@@ -267,7 +303,7 @@ function App() {
         )}
       </main>
     </div>
-  )
+  );
 }
 
-export default App
+export default App;

@@ -13,8 +13,31 @@ export type OcrWord = {
   line_index?: number
 }
 
+const apiInit: RequestInit = { credentials: 'include' }
+
+export async function checkSession(): Promise<boolean> {
+  const response = await fetch('/api/auth/me', apiInit)
+  return response.ok
+}
+
+export async function login(username: string, password: string): Promise<void> {
+  const response = await fetch('/api/auth/login', {
+    ...apiInit,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  })
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null)
+    throw new Error(detail?.detail || 'نام کاربری یا رمز اشتباه است.')
+  }
+}
+
+export async function logout(): Promise<void> {
+  await fetch('/api/auth/logout', { ...apiInit, method: 'POST' })
+}
+
 export type OcrJob = {
-  id: number
   filename: string
   mime_type: string
   status: string
@@ -27,16 +50,14 @@ export type OcrJob = {
   engine: string | null
   confidence: number | null
   error_message: string | null
-  image_url: string | null
   warning?: string | null
-  created_at: string
-  updated_at: string
 }
 
 export async function uploadImage(file: File): Promise<OcrJob> {
   const body = new FormData()
   body.append('file', file)
   const response = await fetch('/api/ocr/upload', {
+    ...apiInit,
     method: 'POST',
     body,
   })
@@ -47,10 +68,43 @@ export async function uploadImage(file: File): Promise<OcrJob> {
   return response.json()
 }
 
-export function excelUrl(jobId: number): string {
-  return `/api/ocr/${jobId}/excel`
+function exportBody(job: OcrJob): object {
+  return {
+    filename: job.filename,
+    extracted_text: job.extracted_text || '',
+    lines: job.lines || [],
+    words: job.words || [],
+    sentences: job.sentences || [],
+    engine: job.engine || '',
+    confidence: job.confidence,
+  }
 }
 
-export function wordUrl(jobId: number): string {
-  return `/api/ocr/${jobId}/word`
+async function downloadExport(path: string, job: OcrJob, fallbackExt: string): Promise<void> {
+  const response = await fetch(path, {
+    ...apiInit,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(exportBody(job)),
+  })
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null)
+    throw new Error(detail?.detail || 'دانلود ناموفق بود.')
+  }
+  const blob = await response.blob()
+  const base = job.filename.replace(/\.[^.]+$/, '') || 'ocr'
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${base}.${fallbackExt}`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+export function downloadExcel(job: OcrJob): Promise<void> {
+  return downloadExport('/api/ocr/export/excel', job, 'xlsx')
+}
+
+export function downloadWord(job: OcrJob): Promise<void> {
+  return downloadExport('/api/ocr/export/word', job, 'docx')
 }

@@ -15,15 +15,21 @@ export type OcrWord = {
   line_index?: number
 }
 
+const API_BASE = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') || ''
+
+function apiURL(path: string): string {
+  return `${API_BASE}${path}`
+}
+
 const apiInit: RequestInit = { credentials: 'include' }
 
 export async function checkSession(): Promise<boolean> {
-  const response = await fetch('/api/auth/me', apiInit)
+  const response = await fetch(apiURL('/api/auth/me'), apiInit)
   return response.ok
 }
 
 export async function login(username: string, password: string): Promise<void> {
-  const response = await fetch('/api/auth/login', {
+  const response = await fetch(apiURL('/api/auth/login'), {
     ...apiInit,
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -36,7 +42,7 @@ export async function login(username: string, password: string): Promise<void> {
 }
 
 export async function logout(): Promise<void> {
-  await fetch('/api/auth/logout', { ...apiInit, method: 'POST' })
+  await fetch(apiURL('/api/auth/logout'), { ...apiInit, method: 'POST' })
 }
 
 export type HealthStatus = {
@@ -50,7 +56,7 @@ export type HealthStatus = {
 }
 
 export async function fetchHealth(): Promise<HealthStatus> {
-  const response = await fetch('/api/health', apiInit)
+  const response = await fetch(apiURL('/api/health'), apiInit)
   if (!response.ok) {
     throw new Error('وضعیت سرور در دسترس نیست.')
   }
@@ -82,7 +88,7 @@ export async function uploadImage(file: File): Promise<OcrJob> {
   const timer = window.setTimeout(() => controller.abort(), OCR_UPLOAD_TIMEOUT_MS)
   let response: Response
   try {
-    response = await fetch('/api/ocr/upload', {
+    response = await fetch(apiURL('/api/ocr/upload'), {
       ...apiInit,
       method: 'POST',
       body,
@@ -112,7 +118,7 @@ function exportBody(job: OcrJob): object {
 }
 
 async function downloadExport(path: string, job: OcrJob, fallbackExt: string): Promise<void> {
-  const response = await fetch(path, {
+  const response = await fetch(apiURL(path), {
     ...apiInit,
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -148,7 +154,7 @@ export type HandwritingStatus = {
 }
 
 export async function fetchHandwritingStatus(): Promise<HandwritingStatus> {
-  const response = await fetch('/api/handwriting/status', apiInit)
+  const response = await fetch(apiURL('/api/handwriting/status'), apiInit)
   if (!response.ok) {
     throw new Error('وضعیت آموزش دست‌خط در دسترس نیست.')
   }
@@ -168,7 +174,7 @@ export async function trainHandwriting(
   const timer = window.setTimeout(() => controller.abort(), HW_TRAIN_TIMEOUT_MS)
   let response: Response
   try {
-    response = await fetch('/api/handwriting/train', {
+    response = await fetch(apiURL('/api/handwriting/train'), {
       ...apiInit,
       method: 'POST',
       body,
@@ -185,7 +191,7 @@ export async function trainHandwriting(
 }
 
 export async function clearHandwriting(): Promise<void> {
-  const response = await fetch('/api/handwriting', { ...apiInit, method: 'DELETE' })
+  const response = await fetch(apiURL('/api/handwriting'), { ...apiInit, method: 'DELETE' })
   if (!response.ok) {
     const detail = await response.json().catch(() => null)
     throw new Error(detail?.detail || 'حذف نمونه ناموفق بود.')

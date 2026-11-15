@@ -46,7 +46,7 @@ func NewServer(cfg *config.Config, root string) (*Server, error) {
 		Username: cfg.AuthUsername,
 		Password: cfg.AuthPassword,
 	}, cfg.SessionSecret)
-	hw, err := handwriting.NewStore(root, cfg.HandwritingDBPath(root))
+	hw, err := handwriting.NewStore(root, cfg.HandwritingDBPath(root), cfg.DatabaseURL)
 	if err != nil {
 		return nil, err
 	}

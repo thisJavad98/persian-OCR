@@ -30,13 +30,29 @@ type Status struct {
 	Message        string `json:"message,omitempty"`
 }
 
+type driverKind int
+
+const (
+	driverSQLite driverKind = iota
+	driverPostgres
+)
+
 type Store struct {
 	mu        sync.RWMutex
 	db        *sql.DB
 	workspace string
+	driver    driverKind
 }
 
-func NewStore(workspace, dbPath string) (*Store, error) {
+// NewStore opens Postgres when databaseURL is set (Neon), otherwise local SQLite.
+func NewStore(workspace, dbPath, databaseURL string) (*Store, error) {
+	if url := normalizeDatabaseURL(databaseURL); url != "" {
+		return openPostgres(workspace, url)
+	}
+	return newSQLiteStore(workspace, dbPath)
+}
+
+func newSQLiteStore(workspace, dbPath string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
 		return nil, err
 	}
@@ -45,8 +61,8 @@ func NewStore(workspace, dbPath string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	s := &Store{db: db, workspace: workspace}
-	if err := s.migrate(); err != nil {
+	s := &Store{db: db, workspace: workspace, driver: driverSQLite}
+	if err := s.migrateSQLite(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -57,7 +73,7 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-func (s *Store) migrate() error {
+func (s *Store) migrateSQLite() error {
 	_, err := s.db.Exec(`
 CREATE TABLE IF NOT EXISTS handwriting_profiles (
   username TEXT PRIMARY KEY,
@@ -90,7 +106,13 @@ func (s *Store) absImage(rel string) string {
 }
 
 func (s *Store) Get(username string) *Profile {
-	p, err := s.load(username)
+	var p *Profile
+	var err error
+	if s.driver == driverPostgres {
+		p, err = s.loadPostgres(username)
+	} else {
+		p, err = s.loadSQLite(username)
+	}
 	if err != nil || p == nil {
 		return nil
 	}
@@ -127,6 +149,13 @@ func (s *Store) Set(username string, p *Profile) error {
 		p.TrainedAt = time.Now()
 	}
 
+	if s.driver == driverPostgres {
+		return s.setPostgres(username, p)
+	}
+	return s.setSQLite(username, p)
+}
+
+func (s *Store) setSQLite(username string, p *Profile) error {
 	_, err := s.db.Exec(`
 INSERT INTO handwriting_profiles (
   username, sample_filename, excel_filename, image_rel_path, reference_grid, style_notes, trained_at
@@ -154,6 +183,9 @@ func (s *Store) Clear(username string) error {
 	defer s.mu.Unlock()
 
 	key := userKey(username)
+	if s.driver == driverPostgres {
+		return s.clearPostgres(username)
+	}
 	_, _ = s.db.Exec(`DELETE FROM handwriting_profiles WHERE username = ?`, key)
 	dir := UserDataDir(s.workspace, username)
 	if dir != "" {
@@ -162,7 +194,7 @@ func (s *Store) Clear(username string) error {
 	return nil
 }
 
-func (s *Store) load(username string) (*Profile, error) {
+func (s *Store) loadSQLite(username string) (*Profile, error) {
 	key := userKey(username)
 	row := s.db.QueryRow(`
 SELECT sample_filename, excel_filename, image_rel_path, reference_grid, style_notes, trained_at

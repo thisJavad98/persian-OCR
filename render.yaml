@@ -1,0 +1,26 @@
+# API with cursor-agent (recommended for OCR). Connect Neon via DATABASE_URL in Render dashboard.
+services:
+  - type: web
+    name: persian-ocr-api
+    runtime: go
+    rootDir: back
+    buildCommand: curl -fsSL https://cursor.com/install | bash && go build -o server ./cmd/server
+    startCommand: ./server
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: CURSOR_API_KEY
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: AUTH_USERNAME
+        sync: false
+      - key: AUTH_PASSWORD
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: OCR_FAST
+        value: "1"
+      - key: CURSOR_OCR_RETRIES
+        value: "0"

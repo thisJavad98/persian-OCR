@@ -27,6 +27,7 @@ type Config struct {
 	AuthPassword     string
 	SessionSecret    string
 	HandwritingDB    string
+	DatabaseURL      string
 }
 
 func Load() (*Config, error) {
@@ -89,6 +90,7 @@ func Load() (*Config, error) {
 	}
 
 	hwDB := strings.TrimSpace(os.Getenv("HANDWRITING_DB_PATH"))
+	dbURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 
 	return &Config{
 		CORSOrigins:      splitCSV(origins),
@@ -108,6 +110,7 @@ func Load() (*Config, error) {
 		AuthPassword:     envOr("AUTH_PASSWORD", "AliFaghihi@123"),
 		SessionSecret:    envOr("SESSION_SECRET", ""),
 		HandwritingDB:    hwDB,
+		DatabaseURL:      dbURL,
 	}, nil
 }
 

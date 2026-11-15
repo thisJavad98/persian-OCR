@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -50,12 +51,14 @@ func (s *Session) SetCookie(w http.ResponseWriter, username string) {
 	payload := username + "|" + strconv.FormatInt(exp, 10)
 	sig := sign(s.Secret, payload)
 	value := base64.RawURLEncoding.EncodeToString([]byte(payload)) + "." + base64.RawURLEncoding.EncodeToString(sig)
+	secure, sameSite := cookieFlags()
 	http.SetCookie(w, &http.Cookie{
 		Name:     cookieName,
 		Value:    value,
 		Path:     "/",
 		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
+		Secure:   secure,
+		SameSite: sameSite,
 		MaxAge:   int(s.MaxAge.Seconds()),
 	})
 }
@@ -115,6 +118,17 @@ func (s *Session) Middleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func cookieFlags() (secure bool, sameSite http.SameSite) {
+	sameSite = http.SameSiteLaxMode
+	if os.Getenv("COOKIE_CROSS_SITE") == "1" {
+		return true, http.SameSiteNoneMode
+	}
+	if os.Getenv("COOKIE_SECURE") == "1" || os.Getenv("VERCEL") == "1" || os.Getenv("RENDER") == "true" {
+		return true, http.SameSiteLaxMode
+	}
+	return false, sameSite
 }
 
 func sign(secret []byte, payload string) []byte {

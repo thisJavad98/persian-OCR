@@ -12,10 +12,14 @@ import (
 type Config struct {
 	CORSOrigins      []string
 	OCRMaxImageSide  int
+	OCRFastMaxSide   int
+	OCRJPEGQuality   int
+	OCRFast          bool
 	Host             string
 	Port             string
 	OCRUseCursor     bool
-	CursorOCRModel   string
+	CursorOCRModel      string
+	CursorOCRFastModel  string
 	CursorOCRTimeout float64
 	CursorOCRRetries int
 	CursorAPIKey     string
@@ -33,12 +37,28 @@ func Load() (*Config, error) {
 		useCursor = "1"
 	}
 
-	maxSide := 1280
+	maxSide := 1024
 	if v := strings.TrimSpace(os.Getenv("OCR_MAX_IMAGE_SIDE")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			maxSide = n
 		}
 	}
+
+	fastMaxSide := 1024
+	if v := strings.TrimSpace(os.Getenv("OCR_FAST_MAX_SIDE")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			fastMaxSide = n
+		}
+	}
+
+	jpegQ := 78
+	if v := strings.TrimSpace(os.Getenv("OCR_JPEG_QUALITY")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 50 && n <= 95 {
+			jpegQ = n
+		}
+	}
+
+	ocrFast := os.Getenv("OCR_FAST") != "0"
 
 	timeout := 420.0
 	if v := strings.TrimSpace(os.Getenv("CURSOR_OCR_TIMEOUT")); v != "" {
@@ -61,6 +81,7 @@ func Load() (*Config, error) {
 	if model == "" {
 		model = "composer-2.5"
 	}
+	fastModel := strings.TrimSpace(os.Getenv("CURSOR_OCR_FAST_MODEL"))
 
 	origins := strings.TrimSpace(os.Getenv("CORS_ORIGINS"))
 	if origins == "" {
@@ -71,7 +92,11 @@ func Load() (*Config, error) {
 
 	return &Config{
 		CORSOrigins:      splitCSV(origins),
-		OCRMaxImageSide:  maxSide,
+		OCRMaxImageSide:     maxSide,
+		OCRFastMaxSide:      fastMaxSide,
+		OCRJPEGQuality:      jpegQ,
+		OCRFast:             ocrFast,
+		CursorOCRFastModel:  fastModel,
 		Host:             envOr("HOST", "0.0.0.0"),
 		Port:             envOr("PORT", "8000"),
 		OCRUseCursor:     useCursor != "0",
@@ -84,6 +109,24 @@ func Load() (*Config, error) {
 		SessionSecret:    envOr("SESSION_SECRET", ""),
 		HandwritingDB:    hwDB,
 	}, nil
+}
+
+func (c *Config) OCRModel() string {
+	if c.OCRFast && c.CursorOCRFastModel != "" {
+		return c.CursorOCRFastModel
+	}
+	return c.CursorOCRModel
+}
+
+func (c *Config) EffectiveOCRMaxSide() int {
+	side := c.OCRMaxImageSide
+	if c.OCRFast && c.OCRFastMaxSide > 0 && side > c.OCRFastMaxSide {
+		side = c.OCRFastMaxSide
+	}
+	if side < 640 {
+		side = 640
+	}
+	return side
 }
 
 func (c *Config) HandwritingDBPath(workspace string) string {

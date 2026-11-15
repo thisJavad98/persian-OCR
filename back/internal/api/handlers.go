@@ -143,11 +143,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 		filename = "upload.png"
 	}
 
-	maxSide := s.cfg.OCRMaxImageSide
-	if maxSide < 720 {
-		maxSide = 720
-	}
-	tmpPath, cleanup, err := imageutil.PrepareToTemp(s.root, raw, maxSide)
+	tmpPath, cleanup, err := imageutil.PrepareToTemp(s.root, raw, s.cfg.EffectiveOCRMaxSide(), s.cfg.OCRJPEGQuality)
 	if err != nil {
 		writeJSON(w, http.StatusOK, failedOut(filename, contentType, "Uploaded file is not a readable image."))
 		return

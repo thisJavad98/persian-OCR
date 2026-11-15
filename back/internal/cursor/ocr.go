@@ -33,6 +33,12 @@ Return ONLY JSON:
 {"is_table":false,"text":"","lines":[],"words":[],"sentences":[],"confidence":0.0,"table":null}
 `
 
+// Shorter prompt: fewer tokens → faster agent turnaround (words/sentences filled server-side).
+const ocrPromptFast = `OCR image at workspace path: %s
+Persian/Arabic RTL; transcribe exactly. Spreadsheet/grid→is_table true + table.rows; else is_table false, table null.
+Return ONLY compact JSON: {"is_table":false,"text":"","lines":[],"confidence":0.0,"table":null}
+Skip words/sentences arrays (leave absent).`
+
 type Result struct {
 	Text       string        `json:"text"`
 	Lines      []string      `json:"lines"`
@@ -72,7 +78,7 @@ func NewService(cfg *config.Config, workspace string) *Service {
 }
 
 func (s *Service) EngineLabel() string {
-	return "cursor:" + s.cfg.CursorOCRModel
+	return "cursor:" + s.cfg.OCRModel()
 }
 
 func (s *Service) Available() bool {
@@ -91,7 +97,7 @@ func (s *Service) Available() bool {
 func (s *Service) Status() Status {
 	st := Status{
 		Ready: s.Available(),
-		Model: s.cfg.CursorOCRModel,
+		Model: s.cfg.OCRModel(),
 	}
 	if s.cfg.CursorAPIKey != "" {
 		st.AuthVia = "api_key"
@@ -205,7 +211,7 @@ func (s *Service) extractWithRetry(parent context.Context, imagePath string, ret
 			select {
 			case <-parent.Done():
 				return nil, friendlyError(parent.Err())
-			case <-time.After(1500 * time.Millisecond):
+			case <-time.After(400 * time.Millisecond):
 			}
 		}
 		attemptCtx, cancel := context.WithTimeout(parent, perAttempt)
@@ -240,7 +246,7 @@ func (s *Service) extractOnce(ctx context.Context, imagePath string, profile *ha
 	}
 	rel = filepath.ToSlash(rel)
 
-	prompt := buildOCRPrompt(rel, profile)
+	prompt := buildOCRPrompt(rel, profile, s.cfg.OCRFast)
 	cmd := s.buildCommand(ctx, binary, root, prompt)
 
 	var stdout, stderr bytes.Buffer
@@ -280,6 +286,9 @@ func (s *Service) extractOnce(ctx context.Context, imagePath string, profile *ha
 			Lines:      nonEmptyLines(cleaned),
 			Confidence: 0.75,
 		}
+		enrichResult(data)
+	} else {
+		enrichResult(data)
 	}
 
 	data.Engine = s.EngineLabel()
@@ -292,7 +301,7 @@ func (s *Service) buildCommand(ctx context.Context, binary, root, prompt string)
 		"--mode", "ask",
 		"-p",
 		"--output-format", "text",
-		"--model", s.cfg.CursorOCRModel,
+		"--model", s.cfg.OCRModel(),
 		"--trust",
 		"--workspace", root,
 	}
@@ -433,6 +442,60 @@ func stripNoise(text string) string {
 		cleaned = regexp.MustCompile(`(?s)\s*` + "```" + `$`).ReplaceAllString(cleaned, "")
 	}
 	return strings.TrimSpace(cleaned)
+}
+
+func enrichResult(res *Result) {
+	if res == nil {
+		return
+	}
+	if len(res.Words) == 0 {
+		for _, ln := range res.Lines {
+			ln = strings.TrimSpace(ln)
+			if ln == "" {
+				continue
+			}
+			res.Words = append(res.Words, strings.Fields(ln)...)
+		}
+		if len(res.Words) == 0 && res.Text != "" {
+			res.Words = strings.Fields(res.Text)
+		}
+	}
+	if len(res.Sentences) == 0 {
+		if res.Text != "" {
+			res.Sentences = splitSentences(res.Text)
+		} else if len(res.Lines) > 0 {
+			res.Sentences = append(res.Sentences, res.Lines...)
+		}
+	}
+	if res.Lines == nil {
+		res.Lines = []string{}
+	}
+	if res.Words == nil {
+		res.Words = []string{}
+	}
+	if res.Sentences == nil {
+		res.Sentences = []string{}
+	}
+}
+
+func splitSentences(text string) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	re := regexp.MustCompile(`[.!?؟\n]+`)
+	parts := re.Split(text, -1)
+	var out []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return []string{text}
+	}
+	return out
 }
 
 func nonEmptyLines(text string) []string {

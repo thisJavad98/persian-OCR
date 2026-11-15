@@ -107,11 +107,7 @@ func (s *Server) handwritingTrain(w http.ResponseWriter, r *http.Request) {
 	}
 	samplePath := filepath.Join(dir, "sample.jpg")
 	previewPath := samplePath
-	maxSide := s.cfg.OCRMaxImageSide
-	if maxSide < 720 {
-		maxSide = 720
-	}
-	tmpPath, cleanup, err := imageutil.PrepareToTemp(s.root, imgRaw, maxSide)
+	tmpPath, cleanup, err := imageutil.PrepareToTemp(s.root, imgRaw, s.cfg.EffectiveOCRMaxSide(), s.cfg.OCRJPEGQuality)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, ErrorDetail{Detail: "تصویر نمونه خوانده نشد."})
 		return

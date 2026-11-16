@@ -174,9 +174,13 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	secs := s.cfg.CursorTimeoutForUpload(tableLayout)*float64(1+s.cfg.CursorOCRRetries) + 20
-	if secs > 180 {
-		secs = 180
+	secs := s.cfg.CursorTimeoutForUpload(tableLayout)*float64(1+s.cfg.CursorOCRRetries) + 25
+	if tableLayout {
+		if secs > 280 {
+			secs = 280
+		}
+	} else if secs > 200 {
+		secs = 200
 	}
 	ocrCtx, cancel := context.WithTimeout(context.Background(), time.Duration(secs*float64(time.Second)))
 	defer cancel()
@@ -250,7 +254,14 @@ func (s *Server) exportWord(w http.ResponseWriter, r *http.Request) {
 }
 
 func buildSuccessOut(filename, mime string, result *cursor.Result, conf float64) OcrJobOut {
-	text := result.Text
+	text := strings.TrimSpace(result.Text)
+	if result.Table != nil && len(result.Table.Rows) > 0 {
+		text = ocr.TablePlainText(result.Table.Headers, result.Table.Rows)
+	} else if ocr.LooksLikeAgentJSON(text) {
+		if plain := ocr.PlainTextFromAgentJSON(text); plain != "" {
+			text = plain
+		}
+	}
 	engine := result.Engine
 	out := OcrJobOut{
 		Filename:      filename,
@@ -277,6 +288,28 @@ func buildSuccessOut(filename, mime string, result *cursor.Result, conf float64)
 	if result.Table != nil {
 		if tbl := ocr.NormalizeTable(result.IsTable, result.Table.Headers, result.Table.Rows); tbl != nil {
 			out.Table = tbl
+		}
+	} else if ocr.LooksLikeAgentJSON(result.Text) {
+		if plain := ocr.PlainTextFromAgentJSON(result.Text); plain != "" {
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(strings.TrimSpace(result.Text)), &raw); err == nil {
+				if tbl, ok := raw["table"]; ok {
+					var headers []string
+					var rows [][]string
+					var obj struct {
+						Headers []string   `json:"headers"`
+						Rows    [][]string `json:"rows"`
+					}
+					if json.Unmarshal(tbl, &obj) == nil {
+						headers, rows = obj.Headers, obj.Rows
+					}
+					if norm := ocr.NormalizeTable(true, headers, rows); norm != nil {
+						out.Table = norm
+						text = ocr.TablePlainText(norm.Headers, norm.Rows)
+						out.ExtractedText = &text
+					}
+				}
+			}
 		}
 	}
 	return out

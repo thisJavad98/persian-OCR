@@ -113,8 +113,8 @@ func Load() (*Config, error) {
 		if retries > 0 {
 			retries = 0
 		}
-		if timeout > 120 {
-			timeout = 120
+		if timeout > 200 {
+			timeout = 200
 		}
 		if maxSide > 768 {
 			maxSide = 768
@@ -177,11 +177,11 @@ func (c *Config) ModelForUpload(tableLayout bool) string {
 func (c *Config) CursorTimeoutForUpload(tableLayout bool) float64 {
 	t := c.CursorOCRTimeout
 	if tableLayout {
-		if t > 150 {
-			t = 150
+		if t > 200 {
+			t = 200
 		}
-	} else if t > 90 {
-		t = 90
+	} else if t > 120 {
+		t = 120
 	}
 	return t
 }

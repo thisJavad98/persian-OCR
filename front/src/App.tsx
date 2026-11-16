@@ -13,7 +13,13 @@ import {
   type HealthStatus,
   type OcrJob,
 } from "./api";
-import { parseTable, tableColCount, type OcrTable } from "./table";
+import {
+  isAgentJsonPayload,
+  parseTableFromJob,
+  tableColCount,
+  tablePlainPreview,
+  type OcrTable,
+} from "./table";
 import "./App.css";
 
 type UiState = "idle" | "uploading" | "ready" | "error";
@@ -217,7 +223,16 @@ function App({ onLogout }: AppProps) {
     Boolean((word.text || "").trim()),
   );
   const sentences = (job?.sentences || []).filter((s) => Boolean(s.trim()));
-  const table: OcrTable | null = job ? parseTable(job.table) : null;
+  const table: OcrTable | null = job ? parseTableFromJob(job) : null;
+  const fullText =
+    job?.extracted_text?.trim() &&
+    !(table && isAgentJsonPayload(job.extracted_text))
+      ? job.extracted_text.trim()
+      : table
+        ? tablePlainPreview(table)
+        : isAgentJsonPayload(job?.extracted_text)
+          ? ""
+          : job?.extracted_text?.trim() || "";
 
   return (
     <div className="frame" data-ui="app">
@@ -470,7 +485,10 @@ function App({ onLogout }: AppProps) {
                 <>
                   {uploadLayout === "table" && !table && (
                     <div className="state-block warn" role="status">
-                      <p>ساختار جدول در JSON نیامد؛ متن خطی زیر را ببینید یا دوباره با همان حالت جدول تلاش کنید.</p>
+                      <p>
+                        جدول شناسایی نشد. تصویر را کوچک‌تر یا واضح‌تر بفرستید و دوباره حالت «جدول / فرم» را
+                        امتحان کنید.
+                      </p>
                     </div>
                   )}
                   {job.warning && (
@@ -516,13 +534,13 @@ function App({ onLogout }: AppProps) {
                     </div>
                   )}
 
-                  {job.extracted_text?.trim() && (
+                  {fullText && (
                     <div className="similar-box">
                       <div className="lines-head">
-                        <span>متن کامل</span>
+                        <span>{table ? "متن همراه جدول" : "متن کامل"}</span>
                       </div>
                       <article className="transcript" dir="rtl" lang="fa">
-                        {job.extracted_text}
+                        {fullText}
                       </article>
                     </div>
                   )}

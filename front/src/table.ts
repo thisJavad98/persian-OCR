@@ -103,3 +103,45 @@ export function parseTable(raw: unknown): OcrTable | null {
 export function tableColCount(table: OcrTable): number {
   return colCount(table.headers, table.rows)
 }
+
+export function parseTableFromJSONString(text: string | null | undefined): OcrTable | null {
+  if (!text?.trim()) return null
+  const raw = text.trim()
+  if (!raw.startsWith('{')) return null
+  try {
+    const j = JSON.parse(raw) as Record<string, unknown>
+    if (j.table && typeof j.table === 'object') return parseTable(j.table)
+    if (j.is_table || Array.isArray(j.rows)) return parseTable(j)
+  } catch {
+    return null
+  }
+  return null
+}
+
+export function parseTableFromJob(job: {
+  table?: unknown
+  extracted_text?: string | null
+}): OcrTable | null {
+  return parseTable(job.table) ?? parseTableFromJSONString(job.extracted_text)
+}
+
+export function isAgentJsonPayload(text: string | null | undefined): boolean {
+  if (!text?.trim().startsWith('{')) return false
+  try {
+    const j = JSON.parse(text.trim()) as Record<string, unknown>
+    return Boolean(j.is_table || j.table || j.lines)
+  } catch {
+    return false
+  }
+}
+
+export function tablePlainPreview(table: OcrTable): string {
+  const lines: string[] = []
+  if (table.headers?.some((h) => h.trim())) {
+    lines.push(table.headers.join(' | '))
+  }
+  for (const row of table.rows) {
+    lines.push(row.join(' | '))
+  }
+  return lines.join('\n')
+}

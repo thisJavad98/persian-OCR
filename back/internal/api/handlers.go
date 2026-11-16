@@ -295,8 +295,8 @@ func buildSuccessOut(filename, mime string, result *cursor.Result, conf float64)
 			Text: word, Confidence: conf, Row: 0, LineIndex: i,
 		})
 	}
-	if result.Table != nil {
-		if tbl := ocr.NormalizeTable(result.IsTable, result.Table.Headers, result.Table.Rows); tbl != nil {
+	if result.Table != nil && len(result.Table.Rows) > 0 {
+		if tbl := ocr.NormalizeTable(result.IsTable, result.Table.Headers, result.Table.Rows); tbl != nil && len(tbl.Rows) > 0 {
 			out.Table = tbl
 		}
 	} else if ocr.LooksLikeAgentJSON(result.Text) {

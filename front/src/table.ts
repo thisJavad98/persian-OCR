@@ -69,7 +69,7 @@ export function parseTable(raw: unknown): OcrTable | null {
       if (cells.some((c) => c !== '')) rows.push(cells)
     }
   }
-  if (rows.length === 0 && !headers?.length) return null
+  if (rows.length === 0) return null
 
   if ((!headers || headers.every((h) => !h)) && rows.length > 0) {
     const candidate = rows[0]

@@ -39,7 +39,7 @@ func FinalizeTable(headers []string, rows [][]string) *TableData {
 			aligned = append(aligned, row)
 		}
 	}
-	if len(aligned) == 0 && len(h) == 0 {
+	if len(aligned) == 0 {
 		return nil
 	}
 

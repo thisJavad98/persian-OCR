@@ -255,6 +255,13 @@ func (s *Service) extractWithRetry(parent context.Context, imagePath string, ret
 		}
 		attemptCtx, cancel := context.WithTimeout(parent, perAttempt)
 		res, err := s.extractOnce(attemptCtx, imagePath, profile, tableLayout, structure)
+		if err == nil && tableLayout && tableNeedsRowFallback(res) {
+			fallbackCtx, cancelFb := context.WithTimeout(parent, perAttempt)
+			if res2, err2 := s.extractOnce(fallbackCtx, imagePath, profile, tableLayout, nil); err2 == nil {
+				res = mergeTableExtract(res, res2, structure)
+			}
+			cancelFb()
+		}
 		cancel()
 		if err == nil {
 			return res, nil
@@ -336,15 +343,65 @@ func (s *Service) extractOnce(ctx context.Context, imagePath string, profile *ha
 	return data, nil
 }
 
+func tableNeedsRowFallback(res *Result) bool {
+	if res == nil {
+		return false
+	}
+	if res.Table != nil && len(res.Table.Rows) > 0 {
+		return false
+	}
+	if res.Table != nil && len(res.Table.Headers) > 0 {
+		return true
+	}
+	return res.Table == nil || len(res.Table.Rows) == 0
+}
+
+func mergeTableExtract(primary, fallback *Result, structure *TableStructure) *Result {
+	if fallback == nil {
+		return primary
+	}
+	if primary == nil {
+		return fallback
+	}
+	out := fallback
+	if out.Table == nil {
+		out.Table = &parsedTable{}
+	}
+	if len(out.Table.Rows) == 0 && primary.Table != nil && len(primary.Table.Rows) > 0 {
+		out.Table.Rows = primary.Table.Rows
+	}
+	headers := out.Table.Headers
+	if len(headers) == 0 && primary.Table != nil {
+		headers = primary.Table.Headers
+	}
+	if len(headers) == 0 && structure != nil {
+		headers = structure.Headers
+	}
+	if len(out.Table.Rows) > 0 {
+		if norm := ocr.NormalizeTable(true, headers, out.Table.Rows); norm != nil {
+			out.Table = &parsedTable{Headers: norm.Headers, Rows: norm.Rows}
+			out.IsTable = true
+		}
+		enrichResult(out)
+	}
+	if out.Table != nil && len(out.Table.Rows) == 0 {
+		out.Table = nil
+	}
+	return out
+}
+
 func applyTableStructureHint(data *Result, structure *TableStructure) {
 	if data == nil || structure == nil || (!structure.IsTable && len(structure.Headers) == 0) {
 		return
 	}
-	data.IsTable = true
-	if data.Table == nil {
-		data.Table = &parsedTable{}
+	if data.Table == nil || len(data.Table.Rows) == 0 {
+		return
 	}
+	data.IsTable = true
 	if len(structure.Headers) > 0 {
+		if data.Table == nil {
+			data.Table = &parsedTable{}
+		}
 		data.Table.Headers = append([]string(nil), structure.Headers...)
 	}
 	if ncol := structure.ColCount; ncol > 0 {

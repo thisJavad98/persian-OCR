@@ -119,12 +119,15 @@ func cleanTableStructure(h *TableStructure) {
 }
 
 func (s *Service) detectTimeout() time.Duration {
-	sec := 50.0
-	if s.cfg.CursorOCRTimeout > 0 && s.cfg.CursorOCRTimeout < sec {
-		sec = s.cfg.CursorOCRTimeout * 0.45
+	sec := 28.0
+	if onVercel() {
+		sec = 22.0
 	}
-	if sec < 35 {
-		sec = 35
+	if s.cfg.CursorOCRTimeout > 0 && s.cfg.CursorOCRTimeout*0.35 < sec {
+		sec = s.cfg.CursorOCRTimeout * 0.35
+	}
+	if sec < 18 {
+		sec = 18
 	}
 	return time.Duration(sec * float64(time.Second))
 }

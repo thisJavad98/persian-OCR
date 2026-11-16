@@ -15,10 +15,13 @@ import (
 	_ "golang.org/x/image/webp"
 )
 
-// PrepareToTemp decodes image bytes, resizes, writes a temporary JPEG under workspace/.scratch, and returns cleanup.
-func PrepareToTemp(workspace string, raw []byte, maxSide, jpegQuality int) (path string, cleanup func(), err error) {
+// PrepareToTemp decodes image bytes, enhances for OCR, resizes, writes a temp JPEG.
+func PrepareToTemp(workspace string, raw []byte, maxSide, jpegQuality int, tableMode bool) (path string, cleanup func(), err error) {
 	if jpegQuality < 50 || jpegQuality > 95 {
 		jpegQuality = 78
+	}
+	if tableMode && jpegQuality < 82 {
+		jpegQuality = 82
 	}
 	img, _, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
@@ -27,12 +30,11 @@ func PrepareToTemp(workspace string, raw []byte, maxSide, jpegQuality int) (path
 
 	bounds := img.Bounds()
 	w, h := bounds.Dx(), bounds.Dy()
-	scale := min(1.0, float64(maxSide)/float64(max(w, h)))
-	if scale < 1.0 {
-		nw := max(1, int(float64(w)*scale))
-		nh := max(1, int(float64(h)*scale))
-		img = imaging.Resize(img, nw, nh, imaging.Box)
+	if minSide := 640; tableMode && max(w, h) < minSide && maxSide < minSide {
+		maxSide = minSide
 	}
+	img = resizeForOCR(img, w, h, maxSide, tableMode)
+	img = enhanceForOCR(img, tableMode)
 
 	scratch := filepath.Join(workspace, ".scratch")
 	if err := os.MkdirAll(scratch, 0o700); err != nil {

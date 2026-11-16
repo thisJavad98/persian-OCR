@@ -161,7 +161,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 	tableLayout := layout != "text"
 	maxSide := s.cfg.EffectiveMaxSideForUpload(tableLayout)
 	jpegQ := s.cfg.JPEGQualityForUpload(tableLayout)
-	tmpPath, cleanup, err := imageutil.PrepareToTemp(s.root, raw, maxSide, jpegQ)
+	tmpPath, cleanup, err := imageutil.PrepareToTemp(s.root, raw, maxSide, jpegQ, tableLayout)
 	if err != nil {
 		writeJSON(w, http.StatusOK, failedOut(filename, contentType, "Uploaded file is not a readable image."))
 		return

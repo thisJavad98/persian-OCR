@@ -108,7 +108,7 @@ func (s *Server) handwritingTrain(w http.ResponseWriter, r *http.Request) {
 	}
 	samplePath := filepath.Join(dir, "sample.jpg")
 	previewPath := samplePath
-	tmpPath, cleanup, err := imageutil.PrepareToTemp(s.root, imgRaw, s.cfg.EffectiveOCRMaxSide(), s.cfg.OCRJPEGQuality)
+	tmpPath, cleanup, err := imageutil.PrepareToTemp(s.root, imgRaw, s.cfg.EffectiveOCRMaxSide(), s.cfg.OCRJPEGQuality, false)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, ErrorDetail{Detail: "تصویر نمونه خوانده نشد."})
 		return

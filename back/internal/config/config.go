@@ -55,7 +55,7 @@ func Load() (*Config, error) {
 		}
 	}
 
-	tableMaxSide := 1120
+	tableMaxSide := 1280
 	if v := strings.TrimSpace(os.Getenv("OCR_TABLE_MAX_SIDE")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			tableMaxSide = n
@@ -63,7 +63,7 @@ func Load() (*Config, error) {
 	}
 
 	jpegQ := 78
-	tableJpegQ := 84
+	tableJpegQ := 88
 	if v := strings.TrimSpace(os.Getenv("OCR_JPEG_QUALITY")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 50 && n <= 95 {
 			jpegQ = n
@@ -122,14 +122,14 @@ func Load() (*Config, error) {
 		if fastMaxSide > 768 {
 			fastMaxSide = 768
 		}
-		if tableMaxSide > 896 {
-			tableMaxSide = 896
+		if tableMaxSide > 1024 {
+			tableMaxSide = 1024
 		}
-		if jpegQ > 72 {
-			jpegQ = 72
+		if jpegQ > 74 {
+			jpegQ = 74
 		}
-		if tableJpegQ > 80 {
-			tableJpegQ = 80
+		if tableJpegQ < 86 {
+			tableJpegQ = 86
 		}
 	}
 

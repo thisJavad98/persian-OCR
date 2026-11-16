@@ -46,7 +46,7 @@ Return ONLY JSON: {"is_table":false,"text":"","lines":[],"confidence":0.0,"table
 Do not include words/sentences.`
 
 // Table prompt: headers + grid, kept short for latency.
-const ocrPromptTable = `TABLE OCR %s — Persian RTL, exact cells.
+const ocrPromptTable = `TABLE OCR %s — Persian RTL, exact cells (contrast-enhanced scan).
 headers[]=top row only (RTL: headers[0]=rightmost column). rows[]=data only (no header duplicate). Empty="".
 JSON only: {"is_table":true,"text":"","lines":[],"confidence":0.0,"table":{"headers":[],"rows":[[]]}}`
 

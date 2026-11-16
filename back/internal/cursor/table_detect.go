@@ -18,7 +18,7 @@ type TableStructure struct {
 	ColCount int      `json:"col_count"`
 }
 
-const ocrPromptTableDetect = `Analyze image: %s (Persian/Arabic).
+const ocrPromptTableDetect = `Analyze image: %s (Persian/Arabic). Image was contrast-enhanced for OCR.
 Phase 1 ONLY — do NOT transcribe data cells.
 
 Decide: table / spreadsheet / printed grid / form with columns?

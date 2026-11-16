@@ -7,9 +7,12 @@ import (
 	"github.com/javad-moghofei/persian-ocr/back/internal/handwriting"
 )
 
-func buildOCRPrompt(imageRel string, profile *handwriting.Profile, fast bool, tableLayout bool) string {
+func buildOCRPrompt(imageRel string, profile *handwriting.Profile, fast bool, tableLayout bool, structure *TableStructure) string {
 	var base string
-	if tableLayout {
+	if tableLayout && structure != nil && (structure.IsTable || len(structure.Headers) > 0) {
+		base = fmt.Sprintf(ocrPromptTableExtractPhase2, imageRel)
+		base += formatStructureHint(structure)
+	} else if tableLayout {
 		base = fmt.Sprintf(ocrPromptTable, imageRel)
 	} else if fast {
 		base = fmt.Sprintf(ocrPromptFast, imageRel)
@@ -22,7 +25,11 @@ func buildOCRPrompt(imageRel string, profile *handwriting.Profile, fast bool, ta
 	var b strings.Builder
 	b.WriteString(base)
 	b.WriteByte('\n')
-	b.WriteString("Handwriting profile—match reference style:\n")
+	if tableLayout {
+		b.WriteString("Handwriting phase: transcribe cells matching the user's script (style_notes + ref_excel).\n")
+	} else {
+		b.WriteString("Handwriting profile—match reference style:\n")
+	}
 	if profile.ImageRelPath != "" {
 		b.WriteString("ref_image: ")
 		b.WriteString(profile.ImageRelPath)
@@ -52,6 +59,26 @@ func buildOCRPrompt(imageRel string, profile *handwriting.Profile, fast bool, ta
 	if notes != "" {
 		b.WriteString("style_notes: ")
 		b.WriteString(notes)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func formatStructureHint(structure *TableStructure) string {
+	if structure == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\nLOCKED STRUCTURE (from phase 1):\n")
+	b.WriteString(fmt.Sprintf("is_table=%v col_count=%d\n", structure.IsTable, structure.ColCount))
+	if len(structure.Headers) > 0 {
+		b.WriteString("headers: ")
+		for i, h := range structure.Headers {
+			if i > 0 {
+				b.WriteString(" | ")
+			}
+			b.WriteString(h)
+		}
 		b.WriteByte('\n')
 	}
 	return b.String()

@@ -65,7 +65,7 @@ export function parseTable(raw: unknown): OcrTable | null {
   if (Array.isArray(t.rows)) {
     for (const row of t.rows) {
       if (!Array.isArray(row)) continue
-      const cells = row.map((c) => String(c ?? '').trim())
+      const cells = row.map((c) => unwrapTableCell(String(c ?? '')))
       if (cells.some((c) => c !== '')) rows.push(cells)
     }
   }
@@ -118,21 +118,81 @@ export function parseTableFromJSONString(text: string | null | undefined): OcrTa
   return null
 }
 
+function mergeTables(primary: OcrTable | null, extra: OcrTable | null): OcrTable | null {
+  if (!primary) return extra
+  if (!extra) return primary
+  const headers =
+    primary.headers?.some((h) => h.trim()) ? primary.headers : extra.headers
+  let rows = primary.rows.length > 0 ? primary.rows : extra.rows
+  rows = rows.map((row) => row.map(unwrapTableCell))
+  return parseTable({ is_table: true, headers, rows })
+}
+
 export function parseTableFromJob(job: {
   table?: unknown
   extracted_text?: string | null
+  lines?: { text?: string }[]
 }): OcrTable | null {
-  return parseTable(job.table) ?? parseTableFromJSONString(job.extracted_text)
+  const fromField = parseTable(job.table)
+  const fromText = parseTableFromJSONString(job.extracted_text)
+  let merged = mergeTables(fromField, fromText)
+  if (!merged?.rows.length && job.lines?.length) {
+    const fromLines = parseTableFromLines(job.lines.map((l) => l.text || ''))
+    merged = mergeTables(merged, fromLines)
+  }
+  return merged
+}
+
+function parseTableFromLines(lines: string[]): OcrTable | null {
+  for (const line of lines) {
+    const t = parseTableFromJSONString(line)
+    if (t?.rows.length) return t
+  }
+  const rows: string[][] = []
+  for (const line of lines) {
+    if (looksLikeJsonLine(line)) continue
+    const cells = line.split(/\s*\|\s*|\t+/).map((c) => c.trim())
+    if (cells.length >= 2) rows.push(cells.map(unwrapTableCell))
+  }
+  if (rows.length === 0) return null
+  return parseTable({ is_table: true, rows })
+}
+
+function unwrapTableCell(cell: string): string {
+  const c = cell.trim()
+  if (!c.startsWith('{') && !c.startsWith('[')) return c
+  try {
+    const j = JSON.parse(c) as Record<string, unknown>
+    if (typeof j.text === 'string' && j.text.trim()) return j.text.trim()
+    if (j.table && typeof j.table === 'object') {
+      const inner = parseTable(j.table)
+      if (inner?.rows[0]) return inner.rows.map((r) => r.join(' ')).join(' / ')
+    }
+    if (Array.isArray(j.rows)) {
+      const inner = parseTable(j)
+      if (inner) return inner.rows.map((r) => r.join(' | ')).join('\n')
+    }
+  } catch {
+    /* keep raw */
+  }
+  return c
+}
+
+export function looksLikeJsonLine(text: string | null | undefined): boolean {
+  if (!text?.trim()) return false
+  const t = text.trim()
+  if (!t.startsWith('{') && !t.startsWith('[')) return false
+  if (t.includes('"is_table"') || t.includes('"table"') || t.includes('"headers"')) return true
+  try {
+    JSON.parse(t)
+    return true
+  } catch {
+    return t.length > 80 && t.includes('":')
+  }
 }
 
 export function isAgentJsonPayload(text: string | null | undefined): boolean {
-  if (!text?.trim().startsWith('{')) return false
-  try {
-    const j = JSON.parse(text.trim()) as Record<string, unknown>
-    return Boolean(j.is_table || j.table || j.lines)
-  } catch {
-    return false
-  }
+  return looksLikeJsonLine(text)
 }
 
 export function tablePlainPreview(table: OcrTable): string {

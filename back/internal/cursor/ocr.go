@@ -231,6 +231,13 @@ func parseStudyNotes(text string) string {
 }
 
 func (s *Service) extractWithRetry(parent context.Context, imagePath string, retries int, profile *handwriting.Profile, tableLayout bool) (*Result, error) {
+	var structure *TableStructure
+	if tableLayout && s.tableTwoPhaseEnabled() {
+		detectCtx, cancel := context.WithTimeout(parent, s.detectTimeout())
+		structure, _ = s.detectTableStructure(detectCtx, imagePath)
+		cancel()
+	}
+
 	var last error
 	attempts := retries + 1
 	if attempts < 1 {
@@ -247,7 +254,7 @@ func (s *Service) extractWithRetry(parent context.Context, imagePath string, ret
 			}
 		}
 		attemptCtx, cancel := context.WithTimeout(parent, perAttempt)
-		res, err := s.extractOnce(attemptCtx, imagePath, profile, tableLayout)
+		res, err := s.extractOnce(attemptCtx, imagePath, profile, tableLayout, structure)
 		cancel()
 		if err == nil {
 			return res, nil
@@ -261,7 +268,7 @@ func (s *Service) extractWithRetry(parent context.Context, imagePath string, ret
 	return nil, friendlyError(last)
 }
 
-func (s *Service) extractOnce(ctx context.Context, imagePath string, profile *handwriting.Profile, tableLayout bool) (*Result, error) {
+func (s *Service) extractOnce(ctx context.Context, imagePath string, profile *handwriting.Profile, tableLayout bool, structure *TableStructure) (*Result, error) {
 	binary := s.agentBinary()
 	if binary == "" {
 		return nil, fmt.Errorf("cursor-agent CLI not found on PATH")
@@ -278,7 +285,7 @@ func (s *Service) extractOnce(ctx context.Context, imagePath string, profile *ha
 	}
 	rel = filepath.ToSlash(rel)
 
-	prompt := buildOCRPrompt(rel, profile, s.cfg.OCRFast, tableLayout)
+	prompt := buildOCRPrompt(rel, profile, s.cfg.OCRFast, tableLayout, structure)
 	cmd := s.buildCommand(ctx, binary, root, prompt, s.cfg.ModelForUpload(tableLayout))
 
 	var stdout, stderr bytes.Buffer
@@ -322,10 +329,37 @@ func (s *Service) extractOnce(ctx context.Context, imagePath string, profile *ha
 	} else {
 		enrichResult(data)
 	}
+	applyTableStructureHint(data, structure)
 
 	data.Engine = s.EngineLabel()
 	data.Raw = trim(out, 8000)
 	return data, nil
+}
+
+func applyTableStructureHint(data *Result, structure *TableStructure) {
+	if data == nil || structure == nil || (!structure.IsTable && len(structure.Headers) == 0) {
+		return
+	}
+	data.IsTable = true
+	if data.Table == nil {
+		data.Table = &parsedTable{}
+	}
+	if len(structure.Headers) > 0 {
+		data.Table.Headers = append([]string(nil), structure.Headers...)
+	}
+	if ncol := structure.ColCount; ncol > 0 {
+		for i := range data.Table.Rows {
+			for len(data.Table.Rows[i]) < ncol {
+				data.Table.Rows[i] = append(data.Table.Rows[i], "")
+			}
+			if len(data.Table.Rows[i]) > ncol {
+				data.Table.Rows[i] = data.Table.Rows[i][:ncol]
+			}
+		}
+	}
+	if norm := ocr.NormalizeTable(true, data.Table.Headers, data.Table.Rows); norm != nil {
+		data.Table = &parsedTable{Headers: norm.Headers, Rows: norm.Rows}
+	}
 }
 
 func (s *Service) agentEnv(root string) []string {
@@ -583,6 +617,21 @@ func stripNoise(text string) string {
 	return strings.TrimSpace(cleaned)
 }
 
+func filterJsonLines(lines []string) []string {
+	if len(lines) == 0 {
+		return lines
+	}
+	out := make([]string, 0, len(lines))
+	for _, ln := range lines {
+		ln = strings.TrimSpace(ln)
+		if ln == "" || ocr.LooksLikeAgentJSON(ln) {
+			continue
+		}
+		out = append(out, ln)
+	}
+	return out
+}
+
 func enrichResult(res *Result) {
 	if res == nil {
 		return
@@ -594,12 +643,28 @@ func enrichResult(res *Result) {
 		}
 	}
 	if res.Table != nil && len(res.Table.Rows) > 0 {
-		if strings.TrimSpace(res.Text) == "" {
+		if strings.TrimSpace(res.Text) == "" || ocr.LooksLikeAgentJSON(res.Text) {
 			res.Text = ocr.TablePlainText(res.Table.Headers, res.Table.Rows)
 		}
-		if len(res.Lines) == 0 {
-			for _, row := range res.Table.Rows {
-				res.Lines = append(res.Lines, strings.Join(row, " | "))
+		res.Lines = res.Lines[:0]
+		for _, row := range res.Table.Rows {
+			res.Lines = append(res.Lines, strings.Join(row, " | "))
+		}
+		res.Sentences = append(res.Sentences[:0], res.Lines...)
+		res.Words = res.Words[:0]
+		for _, row := range res.Table.Rows {
+			for _, cell := range row {
+				cell = strings.TrimSpace(cell)
+				if cell != "" {
+					res.Words = append(res.Words, strings.Fields(cell)...)
+				}
+			}
+		}
+	} else {
+		res.Lines = filterJsonLines(res.Lines)
+		if ocr.LooksLikeAgentJSON(res.Text) {
+			if plain := ocr.PlainTextFromAgentJSON(res.Text); plain != "" {
+				res.Text = plain
 			}
 		}
 	}

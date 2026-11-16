@@ -201,7 +201,13 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := buildSuccessOut(filename, contentType, result, conf)
-	if hwProfile != nil && hwProfile.Active {
+	if tableLayout {
+		msg := "دو مرحله: اول تشخیص جدول و سرستون‌ها، بعد استخراج سلول‌ها."
+		if hwProfile != nil && hwProfile.Active {
+			msg += " با تطبیق دستخط ثبت‌شده."
+		}
+		out.Warning = &msg
+	} else if hwProfile != nil && hwProfile.Active {
 		msg := "شما نمونه استخراجی ثبت کرده‌اید؛ با توجه به آن استخراج دقیق‌تری انجام شد."
 		out.Warning = &msg
 	}
@@ -277,6 +283,10 @@ func buildSuccessOut(filename, mime string, result *cursor.Result, conf float64)
 		Confidence:    &conf,
 	}
 	for i, line := range result.Lines {
+		line = strings.TrimSpace(line)
+		if line == "" || ocr.LooksLikeAgentJSON(line) {
+			continue
+		}
 		row := i + 1
 		out.Lines = append(out.Lines, OcrLine{Text: line, Confidence: conf, Row: &row})
 	}

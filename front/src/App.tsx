@@ -14,10 +14,9 @@ import {
   type OcrJob,
 } from "./api";
 import {
-  isAgentJsonPayload,
+  looksLikeJsonLine,
   parseTableFromJob,
   tableColCount,
-  tablePlainPreview,
   type OcrTable,
 } from "./table";
 import "./App.css";
@@ -219,20 +218,22 @@ function App({ onLogout }: AppProps) {
     if (file) void processFile(file);
   }
 
-  const words = (job?.words || []).filter((word) =>
-    Boolean((word.text || "").trim()),
-  );
-  const sentences = (job?.sentences || []).filter((s) => Boolean(s.trim()));
   const table: OcrTable | null = job ? parseTableFromJob(job) : null;
+  const showTableOnly = Boolean(table?.rows.length);
+  const words = (job?.words || [])
+    .filter((word) => Boolean((word.text || "").trim()))
+    .filter((word) => !looksLikeJsonLine(word.text));
+  const sentences = (job?.sentences || [])
+    .filter((s) => Boolean(s.trim()))
+    .filter((s) => !looksLikeJsonLine(s));
+  const lineItems = (job?.lines || []).filter(
+    (line) =>
+      Boolean((line.text || "").trim()) && !looksLikeJsonLine(line.text),
+  );
   const fullText =
-    job?.extracted_text?.trim() &&
-    !(table && isAgentJsonPayload(job.extracted_text))
-      ? job.extracted_text.trim()
-      : table
-        ? tablePlainPreview(table)
-        : isAgentJsonPayload(job?.extracted_text)
-          ? ""
-          : job?.extracted_text?.trim() || "";
+    showTableOnly || looksLikeJsonLine(job?.extracted_text)
+      ? ""
+      : job?.extracted_text?.trim() || "";
 
   return (
     <div className="frame" data-ui="app">
@@ -462,7 +463,7 @@ function App({ onLogout }: AppProps) {
                   <div className="pulse" />
                   <p>
                     {uploadLayout === "table"
-                      ? "در حال استخراج سلول‌های جدول…"
+                      ? "مرحله ۱: تشخیص جدول و سرستون‌ها · مرحله ۲: استخراج سلول‌ها (با توجه به دستخط در صورت ثبت نمونه)…"
                       : "در حال استخراج متن…"}
                   </p>
                 </div>
@@ -545,7 +546,7 @@ function App({ onLogout }: AppProps) {
                     </div>
                   )}
 
-                  {sentences.length > 0 && (
+                  {sentences.length > 0 && !showTableOnly && (
                     <div className="similar-box">
                       <div className="lines-head">
                         <span>جملات</span>
@@ -561,14 +562,14 @@ function App({ onLogout }: AppProps) {
                     </div>
                   )}
 
-                  {(job.lines?.length || 0) > 0 && (
+                  {lineItems.length > 0 && !showTableOnly && (
                     <div className="similar-box">
                       <div className="lines-head">
                         <span>خطوط</span>
-                        <span className="num">{job.lines.length}</span>
+                        <span className="num">{lineItems.length}</span>
                       </div>
                       <ol className="ocr-lines" dir="rtl" lang="fa">
-                        {job.lines.map((line, index) => (
+                        {lineItems.map((line, index) => (
                           <li key={`${index}-${line.text}`}>
                             <span>{line.text}</span>
                             <span className="num similar-pct">
@@ -580,7 +581,7 @@ function App({ onLogout }: AppProps) {
                     </div>
                   )}
 
-                  {words.length > 0 && (
+                  {words.length > 0 && !showTableOnly && (
                     <div className="similar-box">
                       <div className="lines-head">
                         <span>واژه‌ها</span>

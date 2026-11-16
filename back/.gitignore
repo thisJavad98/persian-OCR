@@ -1,4 +1,9 @@
 bin/
+server
+cursor-runtime/
+cursor-agent-bundle.tgz
+internal/cursor/agent-bin/cursor-agent
+internal/cursor/agent-bin/cursor-bundle.tgz
 .env
 .scratch/
 .data/

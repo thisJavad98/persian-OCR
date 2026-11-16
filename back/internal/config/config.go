@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/javad-moghofei/persian-ocr/back/internal/runtime"
 	"github.com/joho/godotenv"
 )
 
@@ -13,7 +14,9 @@ type Config struct {
 	CORSOrigins      []string
 	OCRMaxImageSide  int
 	OCRFastMaxSide   int
+	OCRTableMaxSide  int
 	OCRJPEGQuality   int
+	OCRTableJPEGQuality int
 	OCRFast          bool
 	Host             string
 	Port             string
@@ -52,10 +55,23 @@ func Load() (*Config, error) {
 		}
 	}
 
+	tableMaxSide := 1120
+	if v := strings.TrimSpace(os.Getenv("OCR_TABLE_MAX_SIDE")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			tableMaxSide = n
+		}
+	}
+
 	jpegQ := 78
+	tableJpegQ := 84
 	if v := strings.TrimSpace(os.Getenv("OCR_JPEG_QUALITY")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 50 && n <= 95 {
 			jpegQ = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("OCR_TABLE_JPEG_QUALITY")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 50 && n <= 95 {
+			tableJpegQ = n
 		}
 	}
 
@@ -92,11 +108,38 @@ func Load() (*Config, error) {
 	hwDB := strings.TrimSpace(os.Getenv("HANDWRITING_DB_PATH"))
 	dbURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 
+	if runtime.Serverless() {
+		ocrFast = true
+		if retries > 0 {
+			retries = 0
+		}
+		if timeout > 120 {
+			timeout = 120
+		}
+		if maxSide > 768 {
+			maxSide = 768
+		}
+		if fastMaxSide > 768 {
+			fastMaxSide = 768
+		}
+		if tableMaxSide > 896 {
+			tableMaxSide = 896
+		}
+		if jpegQ > 72 {
+			jpegQ = 72
+		}
+		if tableJpegQ > 80 {
+			tableJpegQ = 80
+		}
+	}
+
 	return &Config{
 		CORSOrigins:      splitCSV(origins),
 		OCRMaxImageSide:     maxSide,
 		OCRFastMaxSide:      fastMaxSide,
+		OCRTableMaxSide:     tableMaxSide,
 		OCRJPEGQuality:      jpegQ,
+		OCRTableJPEGQuality: tableJpegQ,
 		OCRFast:             ocrFast,
 		CursorOCRFastModel:  fastModel,
 		Host:             envOr("HOST", "0.0.0.0"),
@@ -121,6 +164,28 @@ func (c *Config) OCRModel() string {
 	return c.CursorOCRModel
 }
 
+// ModelForUpload prefers the fast model; set CURSOR_OCR_TABLE_MODEL for slower table quality.
+func (c *Config) ModelForUpload(tableLayout bool) string {
+	if tableLayout {
+		if m := strings.TrimSpace(os.Getenv("CURSOR_OCR_TABLE_MODEL")); m != "" {
+			return m
+		}
+	}
+	return c.OCRModel()
+}
+
+func (c *Config) CursorTimeoutForUpload(tableLayout bool) float64 {
+	t := c.CursorOCRTimeout
+	if tableLayout {
+		if t > 150 {
+			t = 150
+		}
+	} else if t > 90 {
+		t = 90
+	}
+	return t
+}
+
 func (c *Config) EffectiveOCRMaxSide() int {
 	side := c.OCRMaxImageSide
 	if c.OCRFast && c.OCRFastMaxSide > 0 && side > c.OCRFastMaxSide {
@@ -130,6 +195,25 @@ func (c *Config) EffectiveOCRMaxSide() int {
 		side = 640
 	}
 	return side
+}
+
+// EffectiveMaxSideForUpload picks resolution: table uploads may use a slightly higher cap for cell clarity.
+func (c *Config) EffectiveMaxSideForUpload(tableLayout bool) int {
+	side := c.EffectiveOCRMaxSide()
+	if tableLayout && c.OCRTableMaxSide > side {
+		side = c.OCRTableMaxSide
+	}
+	if side < 640 {
+		side = 640
+	}
+	return side
+}
+
+func (c *Config) JPEGQualityForUpload(tableLayout bool) int {
+	if tableLayout {
+		return c.OCRTableJPEGQuality
+	}
+	return c.OCRJPEGQuality
 }
 
 func (c *Config) HandwritingDBPath(workspace string) string {

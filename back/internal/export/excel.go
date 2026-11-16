@@ -113,32 +113,59 @@ func BuildExcel(filename, fullText string, lines []map[string]any, words []map[s
 }
 
 func writeTableSheet(f *excelize.File, sheet string, table *ocr.TableData) {
+	headerStyle, _ := f.NewStyle(&excelize.Style{
+		Font:      &excelize.Font{Bold: true, Size: 12},
+		Fill:      excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"#E8ECF2"}},
+		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center", WrapText: true},
+		Border: []excelize.Border{
+			{Type: "bottom", Color: "#A0A8B8", Style: 2},
+		},
+	})
+	bodyStyle, _ := f.NewStyle(&excelize.Style{
+		Alignment: &excelize.Alignment{Horizontal: "right", Vertical: "top", WrapText: true},
+	})
+
 	row := 1
+	cols := 0
 	if len(table.Headers) > 0 {
-		hdr := make([]interface{}, len(table.Headers))
+		cols = len(table.Headers)
 		for i, h := range table.Headers {
-			hdr[i] = h
+			cell, _ := excelize.CoordinatesToCellName(i+1, row)
+			_ = f.SetCellValue(sheet, cell, h)
+			_ = f.SetCellStyle(sheet, cell, cell, headerStyle)
 		}
-		_ = f.SetSheetRow(sheet, fmt.Sprintf("A%d", row), &hdr)
+		_ = f.SetRowHeight(sheet, row, 22)
 		row++
 	}
 	for _, dataRow := range table.Rows {
-		cells := make([]interface{}, len(dataRow))
 		for i, c := range dataRow {
-			cells[i] = c
+			cell, _ := excelize.CoordinatesToCellName(i+1, row)
+			_ = f.SetCellValue(sheet, cell, c)
+			_ = f.SetCellStyle(sheet, cell, cell, bodyStyle)
 		}
-		_ = f.SetSheetRow(sheet, fmt.Sprintf("A%d", row), &cells)
 		row++
 	}
-	cols := 1
-	if len(table.Headers) > 0 {
-		cols = len(table.Headers)
-	} else if len(table.Rows) > 0 {
+	if cols == 0 && len(table.Rows) > 0 {
 		cols = len(table.Rows[0])
 	}
-	if cols > 0 {
-		endCol, _ := excelize.ColumnNumberToName(cols)
-		_ = f.SetColWidth(sheet, "A", endCol, 22)
+	for c := 1; c <= cols; c++ {
+		col, _ := excelize.ColumnNumberToName(c)
+		w := 14.0
+		if c <= len(table.Headers) && table.Headers[c-1] != "" {
+			w = math.Max(14, float64(len([]rune(table.Headers[c-1])))*0.9)
+		}
+		if w > 42 {
+			w = 42
+		}
+		_ = f.SetColWidth(sheet, col, col, w)
+	}
+	if len(table.Headers) > 0 {
+		_ = f.SetPanes(sheet, &excelize.Panes{
+			Freeze:      true,
+			YSplit:        1,
+			TopLeftCell:   "A2",
+			ActivePane:    "bottomLeft",
+		})
 	}
 }
 

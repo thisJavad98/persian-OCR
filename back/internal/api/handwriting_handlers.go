@@ -12,6 +12,7 @@ import (
 
 	"github.com/javad-moghofei/persian-ocr/back/internal/handwriting"
 	"github.com/javad-moghofei/persian-ocr/back/internal/imageutil"
+	"github.com/javad-moghofei/persian-ocr/back/internal/runtime"
 )
 
 func (s *Server) handwritingStatus(w http.ResponseWriter, r *http.Request) {
@@ -37,7 +38,7 @@ func (s *Server) handwritingClear(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handwritingTrain(w http.ResponseWriter, r *http.Request) {
-	if !s.cursor.Available() {
+	if !runtime.Serverless() && !s.cursor.Available() {
 		writeJSON(w, http.StatusServiceUnavailable, ErrorDetail{Detail: s.cursor.InitError()})
 		return
 	}
@@ -121,17 +122,27 @@ func (s *Server) handwritingTrain(w http.ResponseWriter, r *http.Request) {
 	rel, _ := filepath.Rel(s.root, samplePath)
 	rel = filepath.ToSlash(rel)
 
-	// Detach from client/proxy disconnect; calibration can take as long as OCR.
-	trainSecs := s.cfg.CursorOCRTimeout*float64(1+s.cfg.CursorOCRRetries) + 60
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(trainSecs*float64(time.Second)))
-	defer cancel()
-	notes, err := s.cursor.StudyHandwriting(ctx, previewPath, grid)
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":    false,
-			"error": err.Error(),
-		})
-		return
+	notes := serverlessHandwritingNotes(grid)
+	var calibrationSkipped bool
+	if s.cursor.Available() {
+		trainSecs := s.cfg.CursorOCRTimeout*float64(1+s.cfg.CursorOCRRetries) + 60
+		if runtime.Serverless() {
+			trainSecs = 45
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(trainSecs*float64(time.Second)))
+		notesFromAgent, err := s.cursor.StudyHandwriting(ctx, previewPath, grid)
+		cancel()
+		if err == nil && strings.TrimSpace(notesFromAgent) != "" {
+			notes = strings.TrimSpace(notesFromAgent)
+		} else if err != nil && !runtime.Serverless() {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"ok":    false,
+				"error": err.Error(),
+			})
+			return
+		} else if err != nil {
+			calibrationSkipped = true
+		}
 	}
 
 	prof := &handwriting.Profile{
@@ -145,10 +156,26 @@ func (s *Server) handwritingTrain(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, ErrorDetail{Detail: err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"ok":     true,
 		"status": s.hw.Status(user),
-	})
+	}
+	if calibrationSkipped {
+		out["warning"] = "نمونه و اکسل مرجع ذخیره شد؛ تحلیل هوش مصنوعی روی سرور محدود بود و از متن مرجع برای استخراج بعدی استفاده می‌شود."
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func serverlessHandwritingNotes(referenceGrid string) string {
+	const prefix = "Match the user's handwriting using the reference sample image and this Excel extraction:"
+	grid := strings.TrimSpace(referenceGrid)
+	if len(grid) > 2500 {
+		grid = grid[:2500] + "…"
+	}
+	if grid == "" {
+		return prefix + " (see ref_excel in profile)"
+	}
+	return prefix + "\n" + grid
 }
 
 func saveCopy(src, dst string) error {

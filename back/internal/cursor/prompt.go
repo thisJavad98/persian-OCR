@@ -7,9 +7,11 @@ import (
 	"github.com/javad-moghofei/persian-ocr/back/internal/handwriting"
 )
 
-func buildOCRPrompt(imageRel string, profile *handwriting.Profile, fast bool) string {
+func buildOCRPrompt(imageRel string, profile *handwriting.Profile, fast bool, tableLayout bool) string {
 	var base string
-	if fast {
+	if tableLayout {
+		base = fmt.Sprintf(ocrPromptTable, imageRel)
+	} else if fast {
 		base = fmt.Sprintf(ocrPromptFast, imageRel)
 	} else {
 		base = fmt.Sprintf(ocrPrompt, imageRel)
@@ -27,10 +29,12 @@ func buildOCRPrompt(imageRel string, profile *handwriting.Profile, fast bool) st
 		b.WriteByte('\n')
 	}
 	grid := profile.ReferenceGrid
-	if fast && len(grid) > 2200 {
-		grid = grid[:2200] + "…"
-	} else if len(grid) > 6000 {
-		grid = grid[:6000] + "…"
+	limit := 6000
+	if fast || tableLayout {
+		limit = 900
+	}
+	if len(grid) > limit {
+		grid = grid[:limit] + "…"
 	}
 	if grid != "" {
 		b.WriteString("ref_excel:\n")
@@ -38,8 +42,12 @@ func buildOCRPrompt(imageRel string, profile *handwriting.Profile, fast bool) st
 		b.WriteByte('\n')
 	}
 	notes := profile.StyleNotes
-	if fast && len(notes) > 600 {
-		notes = notes[:600] + "…"
+	noteLimit := 600
+	if fast || tableLayout {
+		noteLimit = 280
+	}
+	if len(notes) > noteLimit {
+		notes = notes[:noteLimit] + "…"
 	}
 	if notes != "" {
 		b.WriteString("style_notes: ")

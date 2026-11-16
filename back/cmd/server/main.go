@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/javad-moghofei/persian-ocr/back/internal/api"
 	"github.com/javad-moghofei/persian-ocr/back/internal/config"
+	"github.com/javad-moghofei/persian-ocr/back/internal/runtime"
 )
 
 func main() {
@@ -17,16 +18,20 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	root, err := os.Getwd()
+	cwd, err := os.Getwd()
 	if err != nil {
 		log.Fatalf("cwd: %v", err)
 	}
+	root := runtime.WorkspaceRoot(cwd)
 
 	srv, err := api.NewServer(cfg, root)
 	if err != nil {
 		log.Fatalf("handwriting store: %v", err)
 	}
 	defer func() { _ = srv.Close() }()
+	if os.Getenv("VERCEL") == "1" && cfg.CursorAPIKey != "" {
+		go srv.WarmCursorAgent()
+	}
 	router := srv.Routes()
 
 	corsMw := cors.Handler(cors.Options{

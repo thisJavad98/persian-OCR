@@ -38,4 +38,4 @@ for key in CURSOR_API_KEY SESSION_SECRET AUTH_USERNAME AUTH_PASSWORD \
   push_env "$key" "${!key-}"
 done
 push_env COOKIE_CROSS_SITE "1"
-echo "Done. Redeploy: cd back && vercel deploy --prod --yes"
+echo "Done. Redeploy API from repo root: vercel deploy --environment production --yes"

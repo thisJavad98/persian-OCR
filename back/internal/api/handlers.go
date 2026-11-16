@@ -34,6 +34,18 @@ type Server struct {
 	hw      *handwriting.Store
 }
 
+func (s *Server) WarmCursorAgent() {
+	_ = s.cursor.Available()
+}
+
+func (s *Server) warmOCR(w http.ResponseWriter, r *http.Request) {
+	ready := s.cursor.Available()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ocr_ready": ready,
+		"status":    "ok",
+	})
+}
+
 func (s *Server) Close() error {
 	if s.hw == nil {
 		return nil
@@ -64,6 +76,7 @@ func (s *Server) Routes() chi.Router {
 	r.Post("/api/auth/login", s.authLogin)
 	r.Post("/api/auth/logout", s.authLogout)
 	r.Get("/api/auth/me", s.authMe)
+	r.Get("/api/warm", s.warmOCR)
 
 	r.Group(func(r chi.Router) {
 		r.Use(s.session.Middleware)
@@ -95,7 +108,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		Database:        "none",
 		OCRReady:        st.Ready,
 		Engines:         s.cursor.Engines(),
-		CursorConnected: st.Ready,
+		CursorConnected: s.cursor.Connected(),
 		CursorAuthVia:   st.AuthVia,
 		CursorModel:     st.Model,
 		Details: map[string]any{
@@ -107,10 +120,11 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
-	if !s.cursor.Available() {
-		writeJSON(w, http.StatusServiceUnavailable, ErrorDetail{Detail: s.cursor.InitError()})
-		return
-	}
+	agentReady := make(chan struct{})
+	go func() {
+		_ = s.cursor.Available()
+		close(agentReady)
+	}()
 
 	if err := r.ParseMultipartForm(20 << 20); err != nil {
 		writeJSON(w, http.StatusBadRequest, ErrorDetail{Detail: "Invalid multipart form."})
@@ -143,22 +157,35 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 		filename = "upload.png"
 	}
 
-	tmpPath, cleanup, err := imageutil.PrepareToTemp(s.root, raw, s.cfg.EffectiveOCRMaxSide(), s.cfg.OCRJPEGQuality)
+	layout := strings.ToLower(strings.TrimSpace(r.FormValue("layout")))
+	tableLayout := layout != "text"
+	maxSide := s.cfg.EffectiveMaxSideForUpload(tableLayout)
+	jpegQ := s.cfg.JPEGQualityForUpload(tableLayout)
+	tmpPath, cleanup, err := imageutil.PrepareToTemp(s.root, raw, maxSide, jpegQ)
 	if err != nil {
 		writeJSON(w, http.StatusOK, failedOut(filename, contentType, "Uploaded file is not a readable image."))
 		return
 	}
 	defer cleanup()
 
-	// Detach from client disconnect; full timeout + retries handled inside cursor.Service.
-	ocrCtx, cancel := context.WithTimeout(context.Background(), time.Duration((s.cfg.CursorOCRTimeout*float64(1+s.cfg.CursorOCRRetries)+30)*float64(time.Second)))
+	<-agentReady
+	if !s.cursor.Available() {
+		writeJSON(w, http.StatusServiceUnavailable, ErrorDetail{Detail: s.cursor.InitError()})
+		return
+	}
+
+	secs := s.cfg.CursorTimeoutForUpload(tableLayout)*float64(1+s.cfg.CursorOCRRetries) + 20
+	if secs > 180 {
+		secs = 180
+	}
+	ocrCtx, cancel := context.WithTimeout(context.Background(), time.Duration(secs*float64(time.Second)))
 	defer cancel()
 
 	var hwProfile *handwriting.Profile
 	if user, uerr := s.session.UsernameFromRequest(r); uerr == nil {
 		hwProfile = s.hw.Get(user)
 	}
-	result, err := s.cursor.Extract(ocrCtx, tmpPath, hwProfile)
+	result, err := s.cursor.Extract(ocrCtx, tmpPath, hwProfile, tableLayout)
 	if err != nil {
 		writeJSON(w, http.StatusOK, failedOut(filename, contentType, err.Error()))
 		return

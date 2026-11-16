@@ -7,7 +7,9 @@ import {
   fetchHealth,
   trainHandwriting,
   uploadImage,
+  warmOcrBackend,
   type HandwritingStatus,
+  type OcrUploadLayout,
   type HealthStatus,
   type OcrJob,
 } from "./api";
@@ -44,6 +46,11 @@ function App({ onLogout }: AppProps) {
   const [hwSamplePreview, setHwSamplePreview] = useState<string | null>(null);
   const hwSampleRef = useRef<HTMLInputElement>(null);
   const hwExcelRef = useRef<HTMLInputElement>(null);
+  const [uploadLayout, setUploadLayout] = useState<OcrUploadLayout>("table");
+
+  useEffect(() => {
+    void warmOcrBackend();
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -176,7 +183,7 @@ function App({ onLogout }: AppProps) {
     }
 
     try {
-      const result = await uploadImage(file);
+      const result = await uploadImage(file, uploadLayout);
       setJob(result);
       if (result.status === "failed") {
         setError(result.error_message || "استخراج متن ناموفق بود.");
@@ -361,6 +368,29 @@ function App({ onLogout }: AppProps) {
           onChange={onFileChange}
         />
 
+        <p className="layout-opts" role="group" aria-label="نوع تصویر">
+          <label className="layout-chip">
+            <input
+              type="radio"
+              name="upload-layout"
+              checked={uploadLayout === "table"}
+              onChange={() => setUploadLayout("table")}
+            />
+            جدول / فرم
+            <span className="layout-chip-sub">سرستون‌ها + اکسل دقیق</span>
+          </label>
+          <label className="layout-chip">
+            <input
+              type="radio"
+              name="upload-layout"
+              checked={uploadLayout === "text"}
+              onChange={() => setUploadLayout("text")}
+            />
+            متن ساده
+            <span className="layout-chip-sub">سریع‌تر</span>
+          </label>
+        </p>
+
         {!previewUrl ? (
           <section
             className={`dropzone ${dragOver ? "is-over" : ""}`}
@@ -382,7 +412,9 @@ function App({ onLogout }: AppProps) {
           >
             <p className="drop-title">تصویر را اینجا رها کنید</p>
             <p className="drop-hint">
-              هر محتوایی — خروجی همان متن واقعی تصویر است
+              {uploadLayout === "table"
+                ? "برای اکسل و فرم‌ها — جدول دقیق با سلول جدا"
+                : "نامه، برچسب، متن پیوسته — بدون ساختار جدول"}
             </p>
           </section>
         ) : (
@@ -413,7 +445,11 @@ function App({ onLogout }: AppProps) {
               {uiState === "uploading" && (
                 <div className="state-block" aria-live="polite">
                   <div className="pulse" />
-                  <p>در حال استخراج دقیق کلمات و جملات با AI…</p>
+                  <p>
+                    {uploadLayout === "table"
+                      ? "در حال استخراج سلول‌های جدول…"
+                      : "در حال استخراج متن…"}
+                  </p>
                 </div>
               )}
 
@@ -432,6 +468,11 @@ function App({ onLogout }: AppProps) {
 
               {uiState === "ready" && job && (
                 <>
+                  {uploadLayout === "table" && !table && (
+                    <div className="state-block warn" role="status">
+                      <p>ساختار جدول در JSON نیامد؛ متن خطی زیر را ببینید یا دوباره با همان حالت جدول تلاش کنید.</p>
+                    </div>
+                  )}
                   {job.warning && (
                     <div className="state-block warn" role="status">
                       <p>{job.warning}</p>
@@ -443,7 +484,9 @@ function App({ onLogout }: AppProps) {
                       <div className="lines-head">
                         <span>جدول استخراج‌شده</span>
                         <span className="num">
-                          {table.rows.length}×{tableColCount(table)}
+                          {table.headers && table.headers.length > 0
+                            ? `${table.headers.length} ستون · ${table.rows.length} سطر`
+                            : `${table.rows.length}×${tableColCount(table)}`}
                         </span>
                       </div>
                       <div className="table-scroll">

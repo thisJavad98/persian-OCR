@@ -9,23 +9,6 @@ type TableData struct {
 	Rows    [][]string `json:"rows"`
 }
 
-// NormalizeTable coerces Cursor JSON into a grid; returns nil if empty.
-func NormalizeTable(isTable bool, headers []string, rows [][]string) *TableData {
-	cleaned := cleanRows(rows)
-	if len(cleaned) == 0 {
-		return nil
-	}
-	h := cleanCells(headers)
-	if !isTable && !looksTabular(cleaned) {
-		return nil
-	}
-	return &TableData{
-		IsTable: true,
-		Headers: h,
-		Rows:    cleaned,
-	}
-}
-
 func looksTabular(rows [][]string) bool {
 	if len(rows) < 2 {
 		return len(rows) == 1 && len(rows[0]) > 1

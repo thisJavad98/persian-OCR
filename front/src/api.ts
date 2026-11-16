@@ -55,6 +55,15 @@ export type HealthStatus = {
   details?: { init_error?: string | null }
 }
 
+/** Warms the OCR agent on the API (no auth). Call once when the app loads. */
+export async function warmOcrBackend(): Promise<void> {
+  try {
+    await fetch(apiURL('/api/warm'))
+  } catch {
+    /* ignore */
+  }
+}
+
 export async function fetchHealth(): Promise<HealthStatus> {
   const response = await fetch(apiURL('/api/health'), apiInit)
   if (!response.ok) {
@@ -81,9 +90,15 @@ export type OcrJob = {
 
 const OCR_UPLOAD_TIMEOUT_MS = 12 * 60 * 1000
 
-export async function uploadImage(file: File): Promise<OcrJob> {
+export type OcrUploadLayout = 'table' | 'text'
+
+export async function uploadImage(
+  file: File,
+  layout: OcrUploadLayout = 'table',
+): Promise<OcrJob> {
   const body = new FormData()
   body.append('file', file)
+  body.append('layout', layout)
   const controller = new AbortController()
   const timer = window.setTimeout(() => controller.abort(), OCR_UPLOAD_TIMEOUT_MS)
   let response: Response

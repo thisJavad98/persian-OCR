@@ -5,11 +5,17 @@
 | بخش | آدرس / وضعیت |
 |-----|----------------|
 | Frontend | https://front-sigma-dun.vercel.app (Vercel · پروژه `front`) |
-| API | پروژه Vercel `persian-ocr-api` — Root Directory = `back` — بعد از push روی `main` دیپلوی یا `vercel deploy` |
+| API | https://persian-ocr-api.vercel.app · پروژه `persian-ocr-api` · Root Directory = `back` |
 | Secrets | `scripts/sync-vercel-api-env.sh` از `back/.env` (بدون `localhost` در DATABASE_URL) |
-| Neon | `DATABASE_URL` را در Vercel → persian-ocr-api → Environment Variables بگذارید |
+| Neon | استور Vercel `persian-ocr-db` → متصل به `persian-ocr-api` (production) · `DATABASE_URL` |
 
-# Deploy: Vercel (front) + Neon (DB) + API (Render or Vercel Go)
+### تمام کردن دیپلوی (چک‌لیست)
+
+1. **Neon:** پروژه بساز → Connection string → در Vercel (`persian-ocr-api`) به نام `DATABASE_URL`
+2. **API روی Vercel:** Root Directory = `back` · دیپلوی از **ریشه ریپو** (نه از داخل `back/`): `vercel link --project persian-ocr-api` سپس `vercel deploy --environment production --yes`
+3. **Secrets:** `./scripts/sync-vercel-api-env.sh` (کلید Cursor از `back/.env`، بدون لوکال DB)
+4. **Front:** بعد از زنده شدن API، `front/vercel.json` را اگر دامنه API فرق داشت عوض کن و `cd front && vercel deploy --prod`
+5. **تست:** `curl https://<api>/api/health` و لاگین از https://front-sigma-dun.vercel.app
 
 ## Neon (Postgres)
 

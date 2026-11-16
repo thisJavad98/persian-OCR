@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -33,11 +34,21 @@ Return ONLY JSON:
 {"is_table":false,"text":"","lines":[],"words":[],"sentences":[],"confidence":0.0,"table":null}
 `
 
-// Shorter prompt: fewer tokens → faster agent turnaround (words/sentences filled server-side).
-const ocrPromptFast = `OCR image at workspace path: %s
-Persian/Arabic RTL; transcribe exactly. Spreadsheet/grid→is_table true + table.rows; else is_table false, table null.
-Return ONLY compact JSON: {"is_table":false,"text":"","lines":[],"confidence":0.0,"table":null}
-Skip words/sentences arrays (leave absent).`
+// Fast prompt: compact but table-first (tables are common in this app).
+const ocrPromptFast = `OCR image: %s
+Persian/Arabic RTL, exact transcription.
+If the image is a table, spreadsheet, form grid, or Excel screenshot:
+  "is_table": true
+  "table": {"headers":["..."] or omit,"rows":[["cell","..."],...]} — one string per cell, row-major, top→bottom, each row RTL column order.
+  "text": plain fallback (rows joined).
+Otherwise: "is_table": false, "table": null.
+Return ONLY JSON: {"is_table":false,"text":"","lines":[],"confidence":0.0,"table":null}
+Do not include words/sentences.`
+
+// Table prompt: headers + grid, kept short for latency.
+const ocrPromptTable = `TABLE OCR %s — Persian RTL, exact cells.
+headers[]=top row only (RTL: headers[0]=rightmost column). rows[]=data only (no header duplicate). Empty="".
+JSON only: {"is_table":true,"text":"","lines":[],"confidence":0.0,"table":{"headers":[],"rows":[[]]}}`
 
 type Result struct {
 	Text       string        `json:"text"`
@@ -85,13 +96,22 @@ func (s *Service) Available() bool {
 	if !s.cfg.OCRUseCursor {
 		return false
 	}
-	if s.agentBinary() == "" {
+	bin := s.agentBinary()
+	if bin == "" || !agentRunnable(bin) {
 		return false
 	}
 	if s.cfg.CursorAPIKey != "" {
 		return true
 	}
 	return s.loggedIn()
+}
+
+// Connected is true when the API key is configured (serverless) or the agent CLI can run (local/Render).
+func (s *Service) Connected() bool {
+	if strings.TrimSpace(s.cfg.CursorAPIKey) != "" {
+		return true
+	}
+	return s.Available()
 }
 
 func (s *Service) Status() Status {
@@ -122,7 +142,19 @@ func (s *Service) InitError() string {
 		return "OCR_USE_CURSOR=0"
 	}
 	if s.agentBinary() == "" {
+		if s.cfg.CursorAPIKey != "" && onVercel() {
+			if lastBundleErr != "" {
+				return lastBundleErr
+			}
+			return "cursor-agent در حال نصب است؛ حدود یک دقیقه بعد دوباره تلاش کنید"
+		}
+		if s.cfg.CursorAPIKey != "" {
+			return "CURSOR_API_KEY is set; waiting for cursor-agent runtime"
+		}
 		return "cursor-agent CLI not found on PATH"
+	}
+	if s.cfg.CursorAPIKey != "" {
+		return "cursor-agent bundle not ready"
 	}
 	return "cursor-agent not logged in (run cursor-agent login) or set CURSOR_API_KEY"
 }
@@ -140,8 +172,8 @@ func (s *Service) InvalidateAuthCache() {
 	s.mu.Unlock()
 }
 
-func (s *Service) Extract(parent context.Context, imagePath string, profile *handwriting.Profile) (*Result, error) {
-	return s.extractWithRetry(parent, imagePath, s.cfg.CursorOCRRetries, profile)
+func (s *Service) Extract(parent context.Context, imagePath string, profile *handwriting.Profile, tableLayout bool) (*Result, error) {
+	return s.extractWithRetry(parent, imagePath, s.cfg.CursorOCRRetries, profile, tableLayout)
 }
 
 // StudyHandwriting runs a short calibration pass on the user's sample + Excel reference.
@@ -160,7 +192,7 @@ func (s *Service) StudyHandwriting(ctx context.Context, imagePath, referenceGrid
 	}
 	rel = filepath.ToSlash(rel)
 	prompt := buildStudyPrompt(rel, referenceGrid)
-	cmd := s.buildCommand(ctx, binary, root, prompt)
+	cmd := s.buildCommand(ctx, binary, root, prompt, s.cfg.OCRModel())
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -198,13 +230,13 @@ func parseStudyNotes(text string) string {
 	return strings.TrimSpace(fallback)
 }
 
-func (s *Service) extractWithRetry(parent context.Context, imagePath string, retries int, profile *handwriting.Profile) (*Result, error) {
+func (s *Service) extractWithRetry(parent context.Context, imagePath string, retries int, profile *handwriting.Profile, tableLayout bool) (*Result, error) {
 	var last error
 	attempts := retries + 1
 	if attempts < 1 {
 		attempts = 1
 	}
-	perAttempt := time.Duration(s.cfg.CursorOCRTimeout * float64(time.Second))
+	perAttempt := time.Duration(s.cfg.CursorTimeoutForUpload(tableLayout) * float64(time.Second))
 
 	for attempt := 0; attempt < attempts; attempt++ {
 		if attempt > 0 {
@@ -215,7 +247,7 @@ func (s *Service) extractWithRetry(parent context.Context, imagePath string, ret
 			}
 		}
 		attemptCtx, cancel := context.WithTimeout(parent, perAttempt)
-		res, err := s.extractOnce(attemptCtx, imagePath, profile)
+		res, err := s.extractOnce(attemptCtx, imagePath, profile, tableLayout)
 		cancel()
 		if err == nil {
 			return res, nil
@@ -229,7 +261,7 @@ func (s *Service) extractWithRetry(parent context.Context, imagePath string, ret
 	return nil, friendlyError(last)
 }
 
-func (s *Service) extractOnce(ctx context.Context, imagePath string, profile *handwriting.Profile) (*Result, error) {
+func (s *Service) extractOnce(ctx context.Context, imagePath string, profile *handwriting.Profile, tableLayout bool) (*Result, error) {
 	binary := s.agentBinary()
 	if binary == "" {
 		return nil, fmt.Errorf("cursor-agent CLI not found on PATH")
@@ -246,8 +278,8 @@ func (s *Service) extractOnce(ctx context.Context, imagePath string, profile *ha
 	}
 	rel = filepath.ToSlash(rel)
 
-	prompt := buildOCRPrompt(rel, profile, s.cfg.OCRFast)
-	cmd := s.buildCommand(ctx, binary, root, prompt)
+	prompt := buildOCRPrompt(rel, profile, s.cfg.OCRFast, tableLayout)
+	cmd := s.buildCommand(ctx, binary, root, prompt, s.cfg.ModelForUpload(tableLayout))
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -296,20 +328,64 @@ func (s *Service) extractOnce(ctx context.Context, imagePath string, profile *ha
 	return data, nil
 }
 
-func (s *Service) buildCommand(ctx context.Context, binary, root, prompt string) *exec.Cmd {
-	args := []string{
+func (s *Service) agentEnv(root string) []string {
+	home := root
+	if onVercel() {
+		home = filepath.Join(os.TempDir(), "persian-ocr-cursor-home")
+		_ = os.MkdirAll(home, 0o700)
+	}
+	cfg := filepath.Join(home, ".config")
+	_ = os.MkdirAll(cfg, 0o700)
+	env := append(os.Environ(),
+		"HOME="+home,
+		"XDG_CONFIG_HOME="+cfg,
+		"CURSOR_HOME="+home,
+		"AGENT_CLI_CREDENTIAL_STORE=file",
+		"CURSOR_AGENT_DISABLE_DEBUG_LOG=1",
+		"CI=1",
+		"TERM=dumb",
+	)
+	if onVercel() {
+		env = append(env,
+			"BROWSER=/bin/false",
+			"DISPLAY=",
+			"CURSOR_AGENT_HEADLESS=1",
+		)
+	}
+	return env
+}
+
+func (s *Service) buildCommand(ctx context.Context, binary, root, prompt, model string) *exec.Cmd {
+	if strings.TrimSpace(model) == "" {
+		model = s.cfg.OCRModel()
+	}
+	flags := []string{
 		"--mode", "ask",
 		"-p",
 		"--output-format", "text",
-		"--model", s.cfg.OCRModel(),
+		"--model", model,
 		"--trust",
 		"--workspace", root,
 	}
 	if s.cfg.CursorAPIKey != "" {
-		args = append(args, "--api-key", s.cfg.CursorAPIKey)
+		flags = append(flags, "--api-key", s.cfg.CursorAPIKey)
 	}
-	args = append(args, prompt)
-	return exec.CommandContext(ctx, binary, args...)
+	flags = append(flags, prompt)
+
+	var cmd *exec.Cmd
+	if strings.HasSuffix(binary, "index.js") {
+		node := resolveNodeForIndex(binary)
+		if node == "" {
+			return exec.CommandContext(ctx, "false")
+		}
+		args := append([]string{binary}, flags...)
+		cmd = exec.CommandContext(ctx, node, args...)
+	} else {
+		cmd = exec.CommandContext(ctx, binary, flags...)
+	}
+	cmd.Env = s.agentEnv(root)
+	cmd.Dir = root
+	return cmd
 }
 
 func isRetryable(err error) bool {
@@ -341,10 +417,62 @@ func friendlyError(err error) error {
 
 func (s *Service) agentBinary() string {
 	if s.agentPath != "" {
-		return s.agentPath
+		if agentRunnable(s.agentPath) {
+			return s.agentPath
+		}
+		s.agentPath = ""
+	}
+	if onVercel() {
+		if p := installCursorBundle(); p != "" {
+			s.agentPath = p
+			return p
+		}
+	}
+	if p := s.resolveAgentPath(); p != "" && agentRunnable(p) {
+		s.agentPath = p
+		return p
 	}
 	for _, name := range []string{"cursor-agent", "agent"} {
 		if p, err := exec.LookPath(name); err == nil {
+			if resolved := resolveAgentPath(p); resolved != "" && agentRunnable(resolved) {
+				s.agentPath = resolved
+				return resolved
+			}
+		}
+	}
+	return ""
+}
+
+func agentRunnable(binary string) bool {
+	if binary == "" {
+		return false
+	}
+	if strings.HasSuffix(binary, "index.js") {
+		if st, err := os.Stat(binary); err != nil || st.IsDir() {
+			return false
+		}
+		return resolveNodeForIndex(binary) != ""
+	}
+	if strings.HasSuffix(binary, "cursor-agent-sea") || strings.HasSuffix(binary, "cursor-agent") {
+		st, err := os.Stat(binary)
+		return err == nil && !st.IsDir()
+	}
+	dir := filepath.Dir(binary)
+	info, err := os.Stat(filepath.Join(dir, "node"))
+	return err == nil && !info.IsDir()
+}
+
+func (s *Service) resolveAgentPath() string {
+	if s.agentPath != "" {
+		return s.agentPath
+	}
+	tmpHome := filepath.Join(os.TempDir(), "persian-ocr-cursor-home", ".local", "bin", "cursor-agent")
+	for _, p := range []string{
+		filepath.Join(s.workspace, "cursor-agent"),
+		filepath.Join(s.workspace, ".local", "bin", "cursor-agent"),
+		tmpHome,
+	} {
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
 			s.agentPath = p
 			return p
 		}
@@ -385,10 +513,21 @@ func parseAgentJSON(text string) *Result {
 		return data
 	}
 	matches := jsonObjectRe.FindAllString(cleaned, -1)
+	var fallback *Result
 	for i := len(matches) - 1; i >= 0; i-- {
-		if data := decodeResult(matches[i]); data != nil && (data.Text != "" || len(data.Lines) > 0) {
+		data := decodeResult(matches[i])
+		if data == nil {
+			continue
+		}
+		if data.Table != nil && len(data.Table.Rows) > 0 {
 			return data
 		}
+		if fallback == nil && (data.Text != "" || len(data.Lines) > 0) {
+			fallback = data
+		}
+	}
+	if fallback != nil {
+		return fallback
 	}
 	return &Result{}
 }
@@ -447,6 +586,22 @@ func stripNoise(text string) string {
 func enrichResult(res *Result) {
 	if res == nil {
 		return
+	}
+	if res.Table == nil {
+		if inferred := ocr.InferTableFromText(res.Text, res.Lines); inferred != nil {
+			res.IsTable = true
+			res.Table = &parsedTable{Headers: inferred.Headers, Rows: inferred.Rows}
+		}
+	}
+	if res.Table != nil && len(res.Table.Rows) > 0 {
+		if strings.TrimSpace(res.Text) == "" {
+			res.Text = ocr.TablePlainText(res.Table.Headers, res.Table.Rows)
+		}
+		if len(res.Lines) == 0 {
+			for _, row := range res.Table.Rows {
+				res.Lines = append(res.Lines, strings.Join(row, " | "))
+			}
+		}
 	}
 	if len(res.Words) == 0 {
 		for _, ln := range res.Lines {

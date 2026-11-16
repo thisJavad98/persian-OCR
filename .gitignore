@@ -22,3 +22,5 @@ front/dist/
 *.xlsx
 .idea/
 .vscode/
+.vercel
+.env*

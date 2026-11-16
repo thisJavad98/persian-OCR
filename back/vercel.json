@@ -1,9 +1,17 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "installCommand": "curl -fsSL https://cursor.com/install | bash",
+  "framework": "go",
+  "buildCommand": "bash scripts/prepare-cursor-agent-bundle.sh && go build -ldflags '-s -w' -o server ./cmd/server",
   "build": {
     "env": {
-      "PATH": "/var/task/.local/bin:/usr/local/bin:/usr/bin:/bin"
+      "PATH": "/var/task/.local/bin:/vercel/path0/.local/bin:/usr/local/bin:/usr/bin:/bin"
     }
-  }
+  },
+  "includeFiles": "cursor-agent-bundle.tgz",
+  "crons": [
+    {
+      "path": "/api/warm",
+      "schedule": "0 4 * * *"
+    }
+  ]
 }

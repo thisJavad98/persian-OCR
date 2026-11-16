@@ -1,5 +1,8 @@
 bin/
 server
+.cursor/
+.config/
+.npm/
 cursor-runtime/
 cursor-agent-bundle.tgz
 internal/cursor/agent-bin/cursor-agent

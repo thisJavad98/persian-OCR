@@ -1,0 +1,8 @@
+.cursor/
+.config/
+.npm/
+.scratch/
+.server/
+uploads/
+.env*
+server

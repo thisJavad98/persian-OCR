@@ -1,0 +1,47 @@
+:root {
+  --site-footer-height: 2.25rem;
+}
+
+.site-footer {
+  position: fixed;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.4rem 1rem calc(0.4rem + env(safe-area-inset-bottom, 0px));
+  background: color-mix(in srgb, #171719 94%, transparent);
+  border-top: 1px solid #2a2a2e;
+  backdrop-filter: blur(8px);
+}
+
+.site-footer p {
+  margin: 0;
+  font-size: 0.75rem;
+  color: #8a8c92;
+  font-family: 'Public Sans', system-ui, sans-serif;
+}
+
+.site-footer-brand {
+  color: #e8792b;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.site-footer-brand:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.site-footer-brand:focus-visible {
+  outline: 2px solid #e8792b;
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.frame,
+.login,
+.gate-loading {
+  padding-bottom: calc(var(--site-footer-height) + env(safe-area-inset-bottom, 0px));
+}
